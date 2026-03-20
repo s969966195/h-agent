@@ -4,9 +4,13 @@ tests/test_adapters.py - Agent Adapter Tests
 
 import pytest
 import subprocess
-import time
+import shutil
 from h_agent.adapters.opencode_adapter import OpencodeAdapter
 from h_agent.adapters.base import BaseAgentAdapter, AgentResponse
+
+
+# Check if opencode CLI is available
+OPENCODE_AVAILABLE = shutil.which("opencode") is not None
 
 
 class TestOpencodeAdapter:
@@ -18,6 +22,7 @@ class TestOpencodeAdapter:
         assert adapter.name == "opencode"
         assert adapter.status.value == "idle"
 
+    @pytest.mark.skipif(not OPENCODE_AVAILABLE, reason="opencode CLI not installed")
     def test_simple_chat(self):
         """Test simple chat with opencode."""
         adapter = OpencodeAdapter(cwd="/tmp")
@@ -29,6 +34,7 @@ class TestOpencodeAdapter:
         finally:
             adapter.stop()
 
+    @pytest.mark.skipif(not OPENCODE_AVAILABLE, reason="opencode CLI not installed")
     def test_tool_call_extraction(self):
         """Test tool call extraction from opencode JSON."""
         adapter = OpencodeAdapter(cwd="/tmp")
@@ -39,6 +45,7 @@ class TestOpencodeAdapter:
         finally:
             adapter.stop()
 
+    @pytest.mark.skipif(not OPENCODE_AVAILABLE, reason="opencode CLI not installed")
     def test_context_manager(self):
         """Test adapter as context manager."""
         with OpencodeAdapter(cwd="/tmp") as adapter:
@@ -46,6 +53,7 @@ class TestOpencodeAdapter:
             response = adapter.chat("hello")
             assert response.content or response.error is None
 
+    @pytest.mark.skipif(not OPENCODE_AVAILABLE, reason="opencode CLI not installed")
     def test_session_metadata(self):
         """Test session ID is captured."""
         adapter = OpencodeAdapter(cwd="/tmp")
