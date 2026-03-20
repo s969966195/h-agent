@@ -294,12 +294,30 @@ def cmd_team(args) -> int:
         _ok("Team initialized.")
         return 0
 
+    if action == "talk":
+        team = AgentTeam()
+        agent_name = args.agent
+        message = args.message
+        timeout = getattr(args, "timeout", 120)
+
+        print(f"[Talking to {agent_name}] {message}")
+        result = team.talk_to(agent_name, message, timeout=timeout)
+
+        if result.success:
+            print(f"\n[{agent_name}]:")
+            print(result.content or "(no content)")
+            return 0
+        else:
+            _err(f"Failed: {result.error}")
+            return 1
+
     print("h-agent team - Multi-agent collaboration")
     print()
     print("Usage:")
     print("  h-agent team list              List team members")
     print("  h-agent team status           Show team status")
     print("  h-agent team init             Initialize team workspace")
+    print("  h-agent team talk <agent> <msg>  Talk to a specific agent")
     return 0
 
 
@@ -1811,6 +1829,10 @@ def main():
     team_list_parser = team_subparsers.add_parser("list", help="List team members")
     team_status_parser = team_subparsers.add_parser("status", help="Show team status")
     team_init_parser = team_subparsers.add_parser("init", help="Initialize team workspace")
+    team_talk_parser = team_subparsers.add_parser("talk", help="Talk to a specific agent")
+    team_talk_parser.add_argument("agent", help="Target agent name")
+    team_talk_parser.add_argument("message", help="Message to send")
+    team_talk_parser.add_argument("--timeout", type=float, default=120, help="Timeout in seconds")
 
     # ---- Logs ----
     logs_parser = subparsers.add_parser("logs", help="View daemon log")

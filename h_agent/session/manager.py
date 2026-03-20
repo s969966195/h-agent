@@ -98,13 +98,23 @@ class SessionManager:
         return sessions
 
     def create_session(self, name: Optional[str] = None, group: Optional[str] = None) -> Dict[str, Any]:
-        """Create a new session."""
+        """Create a new session with auto-generated unique name if not provided."""
         session_id = f"sess-{uuid.uuid4().hex[:8]}"
         now = datetime.now().isoformat()
 
+        # Auto-generate unique name like "对话-20260320-001"
+        if not name:
+            date_str = datetime.now().strftime("%Y%m%d")
+            # Count sessions created today (by date prefix in created_at)
+            today_count = sum(
+                1 for s in self.sessions.values()
+                if s.get("created_at", "")[:10] == datetime.now().strftime("%Y-%m-%d")
+            )
+            name = f"对话-{date_str}-{today_count + 1:03d}"
+
         meta = {
             "session_id": session_id,
-            "name": name or session_id,
+            "name": name,
             "group": group,
             "tags": [],
             "created_at": now,

@@ -225,6 +225,36 @@ class AgentTeam:
 
     # ---- Member Management ----
 
+    def _load_skill_tools(self) -> List[Dict]:
+        """
+        自动加载所有已启用 skill 的工具。
+        
+        Skills 的工具以 `skill_<skill_name>_<tool_name>` 格式注册，
+        这样 agent 可以通过工具名称自动发现和调用 skill。
+        
+        Returns:
+            List of skill tool definitions (OpenAI function format)
+        """
+        try:
+            from h_agent.skills import get_enabled_tools
+            raw_tools = get_enabled_tools()
+            
+            # Prefix each tool with skill_<name>_ to avoid naming conflicts
+            prefixed_tools = []
+            for tool in raw_tools:
+                if "function" in tool:
+                    func = tool["function"]
+                    original_name = func["name"]
+                    # skill_<name>_<func_name> format
+                    func["name"] = f"skill_{original_name}"
+                elif "name" in tool:
+                    original_name = tool["name"]
+                    tool["name"] = f"skill_{original_name}"
+                prefixed_tools.append(tool)
+            return prefixed_tools
+        except Exception:
+            return []
+
     def register(
         self,
         name: str,
@@ -234,13 +264,23 @@ class AgentTeam:
         system_prompt: str = "",
         tools: List[Dict] = None,
     ) -> AgentMember:
-        """注册一个 agent 成员。"""
+        """注册一个 agent 成员，自动加载 skill 工具。"""
+        # Auto-load skill tools and merge with provided tools
+        skill_tools = self._load_skill_tools()
+        
+        # Deduplicate: skip skill tools if a tool with same name already exists
+        provided_names = {t.get("function", {}).get("name") or t.get("name") for t in (tools or [])}
+        skill_tools = [t for t in skill_tools 
+                      if (t.get("function", {}).get("name") or t.get("name")) not in provided_names]
+        
+        all_tools = (tools or []) + skill_tools
+        
         member = AgentMember(
             name=name,
             role=role,
             description=description,
             system_prompt=system_prompt,
-            tools=tools or [],
+            tools=all_tools,
         )
         member.set_handler(handler)
         self.members[name] = member
@@ -599,6 +639,87 @@ class AgentTeam:
     ) -> TaskResult:
         """向单个 agent 发送查询请求。"""
         return self.delegate(agent_name, "query", query, timeout)
+
+    def talk_to(
+        self,
+        agent_name: str,
+        message: str,
+        timeout: float = 120,
+    ) -> TaskResult:
+        """
+        直接与特定 agent 对话（发送聊天消息）。
+        
+        与 query 的区别：query 是请求信息，talk_to 是进行对话交互。
+        消息会作为对话内容发送给目标 agent，类似人类用户与 agent 聊天。
+        
+        Args:
+            agent_name: 目标 agent 名称
+            message: 对话消息内容
+            timeout: 超时秒数
+        
+        Returns:
+            TaskResult，其中 content 是 agent 的回复
+        """
+        member = self.members.get(agent_name)
+        if not member:
+            return TaskResult(
+                agent_name=agent_name,
+                role=AgentRole.CODER,
+                success=False,
+                content=None,
+                error=f"Agent '{agent_name}' not found. Available: {list(self.members.keys())}",
+            )
+
+        if not member.enabled:
+            return TaskResult(
+                agent_name=agent_name,
+                role=member.role,
+                success=False,
+                content=None,
+                error=f"Agent '{agent_name}' is disabled",
+            )
+
+        # 构建对话消息
+        msg = TeamMessage(
+            msg_id=f"msg-{uuid.uuid4().hex[:8]}",
+            sender="user",
+            receiver=agent_name,
+            role=self.coordinator,
+            type="dialog",
+            content=message,
+        )
+
+        task_id = msg.msg_id
+        self.pending_tasks[task_id] = {
+            "type": "dialog",
+            "content": message,
+            "assignee": agent_name,
+            "status": "running",
+            "start": time.time(),
+        }
+
+        start = time.time()
+        try:
+            result = member.handle_message(msg)
+            duration_ms = int((time.time() - start) * 1000)
+            result.duration_ms = duration_ms
+        except Exception as e:
+            duration_ms = int((time.time() - start) * 1000)
+            result = TaskResult(
+                agent_name=agent_name,
+                role=member.role,
+                success=False,
+                content=None,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+
+        self.pending_tasks[task_id]["status"] = "done" if result.success else "failed"
+        self.pending_tasks[task_id]["result"] = result.to_dict()
+        self.history.append(result.to_dict())
+        self._save_state()
+
+        return result
 
     # ---- Progress Tracking ----
 
