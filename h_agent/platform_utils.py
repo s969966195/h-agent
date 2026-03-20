@@ -278,15 +278,16 @@ def normalize_path(path: str) -> str:
 
 def expand_env_vars(path: str) -> str:
     """Expand environment variables in a path string.
-    
+
     Works on both Unix (%VAR%) and Unix ($VAR) style.
     """
     if IS_WINDOWS:
-        import os.path
+        import os as _os_windows
         # Expand %VAR% style
-        path = os.path.expandvars(path)
+        path = _os_windows.path.expandvars(path)
     # Expand $VAR and ${VAR} style
-    return os.path.expanduser(os.path.expandvars(path))
+    import os as _os_module
+    return _os_module.path.expanduser(_os_module.path.expandvars(path))
 
 
 # ============================================================

@@ -203,15 +203,16 @@ def tool_shell_run(
         return f"Error: {e}"
 
 
-def tool_shell_env(filter: str = "", json: bool = False) -> str:
+def tool_shell_env(filter: str = "", as_json: bool = False) -> str:
     """Show environment variables."""
+    import json as json_module
     env = os.environ
-    
+
     if filter:
         filtered = {k: v for k, v in env.items() if k.startswith(filter.upper())}
         env = filtered
-    
-    if json:
+
+    if as_json:
         # Mask sensitive values
         safe_env = {}
         for k, v in env.items():
@@ -219,7 +220,7 @@ def tool_shell_env(filter: str = "", json: bool = False) -> str:
                 safe_env[k] = "***"
             else:
                 safe_env[k] = v
-        return json.dumps(safe_env, indent=2)
+        return json_module.dumps(safe_env, indent=2)
     
     lines = [f"{k}={v}" for k, v in sorted(env.items())]
     return "\n".join(lines)
