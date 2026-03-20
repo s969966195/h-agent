@@ -245,6 +245,73 @@ def cmd_autostart(args) -> int:
     return 0
 
 
+def _create_llm_handler(role_name: str, role_prompt: str):
+    """
+    Create an LLM-based handler for a team agent.
+    The handler calls the configured LLM with the agent's role prompt.
+    """
+    from openai import OpenAI
+    from h_agent.core.config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
+    from h_agent.team.team import TaskResult, AgentRole
+
+    def handler(msg):
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": role_prompt},
+                    {"role": "user", "content": str(msg.content)},
+                ],
+                max_tokens=2048,
+            )
+            content = response.choices[0].message.content
+            return TaskResult(
+                agent_name=role_name,
+                role=AgentRole.COORDINATOR,
+                success=True,
+                content=content,
+            )
+        except Exception as e:
+            return TaskResult(
+                agent_name=role_name,
+                role=AgentRole.COORDINATOR,
+                success=False,
+                content=None,
+                error=str(e),
+            )
+    return handler
+
+
+# Default agent definitions for team init
+DEFAULT_AGENTS = [
+    {
+        "name": "planner",
+        "role": "planner",
+        "description": "任务规划师，负责分析需求和分解任务",
+        "prompt": "你是一个资深任务规划师。你的职责是：\n1. 理解用户需求，分析任务复杂度\n2. 将大任务分解为可执行的小任务\n3. 评估每个子任务的工期和依赖\n4. 制定合理的执行计划\n\n当收到任务时，先思考再回答，给出清晰的任务分解和执行顺序。",
+    },
+    {
+        "name": "coder",
+        "role": "coder",
+        "description": "主程序员，负责代码实现",
+        "prompt": "你是一个资深 Python 程序员。你的职责是：\n1. 根据需求编写高质量代码\n2. 遵循最佳实践，写出可维护的代码\n3. 编写清晰的注释和文档字符串\n4. 考虑边界情况和错误处理\n\n收到任务后，先分析需求，再给出完整实现代码。",
+    },
+    {
+        "name": "reviewer",
+        "role": "reviewer",
+        "description": "代码审查员，负责代码质量把关",
+        "prompt": "你是一个经验丰富的代码审查员。你的职责是：\n1. 审查代码的正确性、安全性和性能\n2. 提出改进建议\n3. 发现潜在的 bug 和漏洞\n4. 确保代码符合团队规范\n\n收到代码后，给出具体、中肯的审查意见。",
+    },
+    {
+        "name": "devops",
+        "role": "devops",
+        "description": "运维工程师，负责部署和自动化",
+        "prompt": "你是一个资深的 DevOps 工程师。你的职责是：\n1. 编写部署脚本和 CI/CD 配置\n2. 优化构建和部署流程\n3. 配置监控和日志系统\n4. 编写运维文档\n\n收到任务后，给出具体的实施方案。",
+    },
+]
+
+
 def cmd_team(args) -> int:
     """Handle team command — multi-agent collaboration."""
     from h_agent.team.team import AgentTeam, AgentRole
@@ -258,7 +325,8 @@ def cmd_team(args) -> int:
         if not members:
             print("No agents registered in the team.")
             print()
-            print("Register agents programmatically:")
+            print("Run 'h-agent team init' to initialize a default team.")
+            print("Or register agents programmatically:")
             print("  from h_agent.team import AgentTeam, AgentRole")
             print("  team = AgentTeam()")
             print("  team.register('coder', AgentRole.CODER, my_handler)")
@@ -271,7 +339,6 @@ def cmd_team(args) -> int:
 
     if action == "status":
         team = AgentTeam()
-        status = team.get_task_status("")
         history = team.list_history(limit=5)
         pending = team.list_pending_tasks()
         print(f"Team: {team.team_id}")
@@ -282,7 +349,7 @@ def cmd_team(args) -> int:
 
     if action == "init":
         from h_agent.platform_utils import IS_WINDOWS, IS_MACOS, IS_LINUX
-        print(f"Initializing team workspace...")
+        print("Initializing team workspace...")
         if IS_MACOS:
             print("  Platform: macOS")
         elif IS_LINUX:
@@ -290,8 +357,44 @@ def cmd_team(args) -> int:
         elif IS_WINDOWS:
             print("  Platform: Windows")
         print(f"  Team dir: {__import__('pathlib').Path.home() / '.h-agent' / 'team'}")
+
         team = AgentTeam(team_id="default")
-        _ok("Team initialized.")
+
+        # Check if team already has members
+        existing = team.list_members()
+        if existing:
+            print(f"\nTeam already has {len(existing)} registered agents.")
+            print("Use 'h-agent team list' to see them.")
+            _ok("Team already initialized.")
+            return 0
+
+        # Register default agents
+        print("\nRegistering default agents:")
+        role_map = {
+            "planner": AgentRole.PLANNER,
+            "coder": AgentRole.CODER,
+            "reviewer": AgentRole.REVIEWER,
+            "devops": AgentRole.DEVOPS,
+        }
+        for agent_def in DEFAULT_AGENTS:
+            name = agent_def["name"]
+            role = role_map.get(agent_def["role"], AgentRole.CODER)
+            handler = _create_llm_handler(name, agent_def["prompt"])
+            team.register(
+                name,
+                role,
+                handler,
+                description=agent_def["description"],
+            )
+            print(f"  ✅ {name} [{agent_def['role']}] — {agent_def['description']}")
+
+        print()
+        _ok("Team initialized with default agents!")
+        print()
+        print("Try it out:")
+        print("  h-agent team list          # View all agents")
+        print("  h-agent team talk planner '分析一下如何实现用户登录功能'")
+        print("  h-agent team talk coder     '用 Python 实现一个快速排序'")
         return 0
 
     if action == "talk":
@@ -316,7 +419,7 @@ def cmd_team(args) -> int:
     print("Usage:")
     print("  h-agent team list              List team members")
     print("  h-agent team status           Show team status")
-    print("  h-agent team init             Initialize team workspace")
+    print("  h-agent team init             Initialize team with default agents")
     print("  h-agent team talk <agent> <msg>  Talk to a specific agent")
     return 0
 

@@ -106,6 +106,8 @@ class AgentMember:
     _adapter_instance: Any = field(default=None, repr=False)
     # 通信回调
     _handle_message: Optional[Callable[["TeamMessage"], "TaskResult"]] = field(default=None, repr=False)
+    # 原始 prompt（用于从状态恢复时重建 handler）
+    _prompt: str = field(default="", repr=False)
 
     def handle_message(self, msg: TeamMessage) -> TaskResult:
         """处理收到的消息。"""
@@ -116,7 +118,10 @@ class AgentMember:
             role=self.role,
             success=False,
             content=None,
-            error="No handler registered",
+            error=(
+                f"Agent '{self.name}' has no active handler. "
+                f"Run 'h-agent team init' to re-initialize agents with live handlers."
+            ),
         )
 
     def set_handler(self, handler: Callable[[TeamMessage], TaskResult]):
@@ -187,6 +192,63 @@ class MessageBus:
         """清空收件箱。"""
         for p in self.inbox_dir.glob("*.json"):
             p.unlink()
+
+
+# ============================================================
+# LLM Handler Factory (for state reload)
+# ============================================================
+
+def _create_llm_handler_from_prompt(role_name: str, role_prompt: str):
+    """
+    Create an LLM-based handler for a team agent from a stored prompt.
+    Used to recreate handlers when loading team state.
+    """
+    from openai import OpenAI
+
+    def handler(msg):
+        try:
+            # Import here to avoid circular imports at module load time
+            from h_agent.core.config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
+            from h_agent.team.team import TaskResult, AgentRole
+
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": role_prompt},
+                    {"role": "user", "content": str(msg.content)},
+                ],
+                max_tokens=2048,
+            )
+            content = response.choices[0].message.content
+            return TaskResult(
+                agent_name=role_name,
+                role=AgentRole.COORDINATOR,
+                success=True,
+                content=content,
+            )
+        except Exception as e:
+            from h_agent.team.team import TaskResult, AgentRole
+            return TaskResult(
+                agent_name=role_name,
+                role=AgentRole.COORDINATOR,
+                success=False,
+                content=None,
+                error=str(e),
+            )
+    return handler
+
+
+# ============================================================
+# Default Agent Prompts (fallback for old state files)
+# ============================================================
+
+DEFAULT_PROMPTS = {
+    "planner": "你是一个资深任务规划师。你的职责是：\n1. 理解用户需求，分析任务复杂度\n2. 将大任务分解为可执行的小任务\n3. 评估每个子任务的工期和依赖\n4. 制定合理的执行计划\n\n当收到任务时，先思考再回答，给出清晰的任务分解和执行顺序。",
+    "coder": "你是一个资深 Python 程序员。你的职责是：\n1. 根据需求编写高质量代码\n2. 遵循最佳实践，写出可维护的代码\n3. 编写清晰的注释和文档字符串\n4. 考虑边界情况和错误处理\n\n收到任务后，先分析需求，再给出完整实现代码。",
+    "reviewer": "你是一个经验丰富的代码审查员。你的职责是：\n1. 审查代码的正确性、安全性和性能\n2. 提出改进建议\n3. 发现潜在的 bug 和漏洞\n4. 确保代码符合团队规范\n\n收到代码后，给出具体、中肯的审查意见。",
+    "devops": "你是一个资深的 DevOps 工程师。你的职责是：\n1. 编写部署脚本和 CI/CD 配置\n2. 优化构建和部署流程\n3. 配置监控和日志系统\n4. 编写运维文档\n\n收到任务后，给出具体的实施方案。",
+}
 
 
 # ============================================================
@@ -281,6 +343,7 @@ class AgentTeam:
             description=description,
             system_prompt=system_prompt,
             tools=all_tools,
+            _prompt=system_prompt,
         )
         member.set_handler(handler)
         self.members[name] = member
@@ -780,6 +843,7 @@ class AgentTeam:
                     "description": m.description,
                     "enabled": m.enabled,
                     "session_id": self._agent_sessions.get(m.name),
+                    "system_prompt": getattr(m, "_prompt", ""),
                 }
                 for m in self.members.values()
             ],
@@ -807,6 +871,31 @@ class AgentTeam:
                     # Sync to member if registered
                     if name in self.members:
                         self.members[name].session_id = session_id
+                # Restore registered members from state
+                # Try to recreate live handlers from stored prompts or defaults
+                for m_data in state.get("members", []):
+                    name = m_data["name"]
+                    if name not in self.members:
+                        role = AgentRole(m_data.get("role", "coder"))
+                        # Use stored prompt, or fall back to DEFAULT_PROMPTS for known agents
+                        system_prompt = m_data.get("system_prompt", "") or DEFAULT_PROMPTS.get(name, "")
+                        member = AgentMember(
+                            name=name,
+                            role=role,
+                            description=m_data.get("description", ""),
+                            enabled=m_data.get("enabled", True),
+                            session_id=loaded_sessions.get(name),
+                            _prompt=system_prompt,
+                        )
+                        # Try to recreate handler from stored/default prompt
+                        if system_prompt:
+                            try:
+                                handler = _create_llm_handler_from_prompt(name, system_prompt)
+                                member.set_handler(handler)
+                            except Exception:
+                                # Handler creation failed; member stays without handler
+                                pass
+                        self.members[name] = member
             except (json.JSONDecodeError, OSError):
                 pass
 

@@ -23,7 +23,6 @@
   - [快速上手](#快速上手-2)
   - [详细步骤](#详细步骤-2)
   - [示例](#示例-2)
-  - [深入阅读](#深入阅读-2)
 - [第四章：技能系统（Skill）](#第四章技能系统skill)
   - [场景描述](#场景描述-3)
   - [快速上手](#快速上手-3)
@@ -242,118 +241,125 @@ $ h-agent session history web-dev --limit 3
 ## 第三章：多 Agent 协作
 
 ### 场景描述
-你需要处理复杂任务，希望多个 agent 协同工作，比如一个负责前端、一个负责后端、一个负责测试。
+你需要处理复杂任务，希望多个 agent 协同工作，比如一个负责规划、一个负责编码、一个负责审查。
 
 ### 快速上手
 ```bash
-# 启动团队模式
-h-agent team start --agents frontend,backend,tester
+# 初始化团队（注册默认 agent）
+h-agent team init
 
-# 给团队分配任务
-h-agent team assign "构建一个待办事项应用"
+# 查看团队成员
+h-agent team list
 
-# 查看团队状态
-h-agent team status
+# 和特定 agent 对话
+h-agent team talk planner "分析一下如何实现用户登录功能"
+h-agent team talk coder "用 Python 实现一个快速排序"
 ```
 
 ### 详细步骤
 
 #### 什么是多 agent
 多 agent 协作允许你：
-- **角色分工**: 每个 agent 有特定专长（前端开发、后端开发、测试等）
-- **并行执行**: 多个 agent 可以同时工作
-- **协调通信**: agents 可以相互通信和协调
-- **统一输出**: 最终结果由协调 agent 整合
+- **角色分工**: 每个 agent 有特定专长（planner 规划、coder 编码、reviewer 审查、devops 运维）
+- **独立对话**: 可以单独和某个 agent 交互
+- **团队意识**: 多个 agent 知道彼此的存在，可以协调
 
-#### 如何启动多个 agent
+#### 如何初始化团队
 ```bash
-# 启动预定义团队
-h-agent team start --preset fullstack
+# 初始化团队，注册默认 agent
+h-agent team init
 
-# 自定义团队配置
-h-agent team start --config team.yaml
+# 默认会注册以下 agent：
+#   planner   — 任务规划师
+#   coder     — 主程序员
+#   reviewer  — 代码审查员
+#   devops    — 运维工程师
 
-# 临时启动多个独立 agent
-h-agent agent start --name dev1 --role "前端专家"
-h-agent agent start --name dev2 --role "后端专家"
-```
-
-#### 如何让 agent 组成团队
-团队配置文件示例 (`team.yaml`)：
-```yaml
-team_name: web-app-team
-coordinator: manager
-agents:
-  - name: frontend
-    role: "React 和 TypeScript 专家"
-    model: gpt-4o
-  - name: backend  
-    role: "Node.js 和 Express 专家"
-    model: gpt-4o
-  - name: tester
-    role: "自动化测试专家"
-    model: gpt-4o-mini
-```
-
-#### 如何给每个 agent 分配任务
-任务分配方式：
-- **统一任务**: 给整个团队一个大任务，由协调者分解
-- **具体分配**: 直接给特定 agent 分配子任务
-- **动态调整**: 根据进展动态重新分配
-
-```bash
-# 给团队整体任务
-h-agent team assign "开发一个用户登录系统"
-
-# 给特定 agent 任务  
-h-agent agent assign frontend "实现登录页面 UI"
-
-# 查看任务进度
-h-agent team progress
-```
-
-#### 如何查看团队状态
-```bash
-# 查看团队概览
+# 查看团队状态
 h-agent team status
+```
 
-# 查看详细状态
-h-agent team status --verbose
+#### 如何与 agent 对话
+```bash
+# 和规划师讨论任务分解
+h-agent team talk planner "帮我分解一下开发博客系统需要哪些步骤"
 
-# 查看特定 agent 状态
-h-agent agent status frontend
+# 和程序员讨论实现
+h-agent team talk coder "用 Flask 实现一个简单的 REST API"
 
-# 查看团队日志
-h-agent team logs
+# 和审查员讨论代码质量
+h-agent team talk reviewer "帮我审查一下这段代码"
+
+# 和运维讨论部署
+h-agent team talk devops "如何用 Docker 部署这个应用"
+```
+
+#### 如何注册自定义 agent
+除了默认 agent，你也可以编程方式注册自己的 agent：
+
+```python
+from h_agent.team import AgentTeam, AgentRole
+
+team = AgentTeam()
+
+def my_handler(msg):
+    # msg.content 是收到的消息内容
+    # 返回 TaskResult
+    from h_agent.team.team import TaskResult
+    return TaskResult(
+        agent_name="my-agent",
+        role=AgentRole.CODER,
+        success=True,
+        content=f"处理了: {msg.content}",
+    )
+
+team.register("my-agent", AgentRole.CODER, my_handler,
+              description="我的自定义 agent")
+```
+
+#### 查看团队状态
+```bash
+# 查看团队成员
+h-agent team list
+
+# 查看团队状态
+h-agent team status
 ```
 
 ### 示例
 ```bash
-# 多 agent 协作示例
-$ h-agent team start --preset fullstack --name todo-app
-Team 'todo-app' started with 3 agents
+$ h-agent team init
+Initializing team workspace...
+Registering default agents:
+  ✅ planner [planner] — 任务规划师
+  ✅ coder [coder] — 主程序员
+  ✅ reviewer [reviewer] — 代码审查员
+  ✅ devops [devops] — 运维工程师
+✅ Team initialized with default agents!
 
-$ h-agent team assign "创建一个待办事项应用，包含用户认证"
-分配任务给 todo-app 团队...
+$ h-agent team list
+Team members (4):
+  ✅ planner [planner] — 任务规划师，负责分析需求和分解任务
+  ✅ coder [coder] — 主程序员，负责代码实现
+  ✅ reviewer [reviewer] — 代码审查员，负责代码质量把关
+  ✅ devops [devops] — 运维工程师，负责部署和自动化
 
-$ h-agent team status
-团队: todo-app
-协调者: manager (活跃)
-成员:
-- frontend: 实现登录/注册页面 (进行中)
-- backend: 开发认证 API (等待前端规格)
-- tester: 准备测试用例 (就绪)
+$ h-agent team talk coder "用 Python 实现快速排序"
+[Talking to coder] 用 Python 实现快速排序
 
-$ h-agent team logs --last 5
-[frontend] 创建了 Login.tsx 组件
-[manager] 将前端规格发送给 backend
-[backend] 开始实现 /api/auth/login 端点
+[coder]:
+def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    middle = [x for x in arr if x == pivot]
+    right = [x for x in arr if x > pivot]
+    return quicksort(left) + middle + quicksort(right)
+
+# 示例
+print(quicksort([3, 6, 8, 10, 1, 2, 1]))  # [1, 1, 2, 3, 6, 8, 10]
 ```
-
-### 深入阅读
-- [多 Agent 架构](features/subagents.md)
-- [团队协调机制](features/team-coordination.md)
-- [Agent 角色定义](features/agent-roles.md)
 
 ---
 
