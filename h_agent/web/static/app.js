@@ -5,6 +5,8 @@ class HAgentUI {
         this.currentSessionId = null;
         this.sessions = [];
         this.isStreaming = false;
+        this.currentAgent = '__default__';
+        this.agents = [];
         
         this.messagesEl = document.getElementById('messages');
         this.chatForm = document.getElementById('chatForm');
@@ -13,6 +15,7 @@ class HAgentUI {
         this.newChatBtn = document.getElementById('newChatBtn');
         this.clearBtn = document.getElementById('clearBtn');
         this.chatTitle = document.getElementById('chatTitle');
+        this.agentSelect = document.getElementById('agentSelect');
         
         this.init();
     }
@@ -21,6 +24,17 @@ class HAgentUI {
         this.chatForm.addEventListener('submit', (e) => this.handleSubmit(e));
         this.newChatBtn.addEventListener('click', () => this.newChat());
         this.clearBtn.addEventListener('click', () => this.clearChat());
+        
+        // Agent selector change
+        this.agentSelect.addEventListener('change', (e) => {
+            this.currentAgent = e.target.value;
+            const agent = this.agents.find(a => a.id === this.currentAgent);
+            if (agent && agent.id !== '__default__') {
+                this.chatTitle.textContent = `🤖 ${agent.name}`;
+            } else {
+                this.chatTitle.textContent = 'New Chat';
+            }
+        });
         
         // Auto-resize textarea
         this.messageInput.addEventListener('input', () => {
@@ -36,8 +50,9 @@ class HAgentUI {
             }
         });
         
-        // Load sessions
+        // Load sessions and agents
         this.loadSessions();
+        this.loadAgents();
     }
     
     async loadSessions() {
@@ -51,6 +66,35 @@ class HAgentUI {
         } catch (e) {
             console.error('Failed to load sessions:', e);
         }
+    }
+    
+    async loadAgents() {
+        try {
+            const res = await fetch('/api/agents');
+            const data = await res.json();
+            if (data.success) {
+                this.agents = data.agents || [];
+                this.renderAgents();
+            }
+        } catch (e) {
+            console.error('Failed to load agents:', e);
+        }
+    }
+    
+    renderAgents() {
+        // Keep the default option, clear team agents
+        this.agentSelect.innerHTML = '';
+        
+        this.agents.forEach(agent => {
+            const opt = document.createElement('option');
+            opt.value = agent.id;
+            opt.textContent = agent.name + (agent.team ? ` (${agent.role})` : '');
+            opt.title = agent.description || agent.role;
+            this.agentSelect.appendChild(opt);
+        });
+        
+        // Restore selected agent
+        this.agentSelect.value = this.currentAgent;
     }
     
     renderSessions() {
@@ -75,7 +119,15 @@ class HAgentUI {
         this.currentSessionId = null;
         this.messagesEl.innerHTML = '';
         this.addWelcomeMessage();
-        this.chatTitle.textContent = 'New Chat';
+        // Update title based on selected agent
+        if (this.currentAgent !== '__default__') {
+            const agent = this.agents.find(a => a.id === this.currentAgent);
+            if (agent) {
+                this.chatTitle.textContent = `🤖 ${agent.name}`;
+            }
+        } else {
+            this.chatTitle.textContent = 'New Chat';
+        }
         this.renderSessions();
         this.messageInput.focus();
     }
@@ -145,7 +197,8 @@ class HAgentUI {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message: message,
-                    session_id: this.currentSessionId
+                    session_id: this.currentSessionId,
+                    agent: this.currentAgent,
                 })
             });
             

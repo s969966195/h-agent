@@ -129,7 +129,40 @@ html, body {
 
 .header-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
+}
+
+.agent-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px 10px;
+}
+
+.agent-label {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.agent-select {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    padding: 2px 0;
+    min-width: 100px;
+}
+
+.agent-select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
 }
 
 .btn-icon {

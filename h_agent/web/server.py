@@ -21,6 +21,15 @@ from h_agent.session.manager import get_manager
 from h_agent.core.config import MODEL, OPENAI_BASE_URL, OPENAI_API_KEY
 from h_agent.core.tools import execute_tool_call, TOOLS as CORE_TOOLS
 
+# Lazy-load team
+_team = None
+def get_team():
+    global _team
+    if _team is None:
+        from h_agent.team.team import AgentTeam
+        _team = AgentTeam()
+    return _team
+
 app = Flask(__name__, 
             template_folder=str(Path(__file__).parent / "templates"),
             static_folder=str(Path(__file__).parent / "static"))
@@ -137,6 +146,52 @@ def api_create_session():
     session = mgr.create_session(data.get("name"), data.get("group"))
     return jsonify({"success": True, "session": session})
 
+@app.route("/api/agents", methods=["GET"])
+def api_list_agents():
+    """List all available agents (default + team members)."""
+    team = get_team()
+    members = team.list_members()
+
+    agents = [
+        {
+            "id": "__default__",
+            "name": "默认助手",
+            "role": "assistant",
+            "description": "默认 AI 助手，可以执行各种任务",
+            "team": None,
+        }
+    ]
+
+    # Add team members
+    for m in members:
+        agents.append({
+            "id": m["name"],
+            "name": m["name"],
+            "role": m["role"],
+            "description": m["description"] or f"{m['role']} agent",
+            "team": team.team_id,
+        })
+
+    return jsonify({"success": True, "agents": agents})
+
+
+@app.route("/api/teams", methods=["GET"])
+def api_list_teams():
+    """List all teams and their members."""
+    team = get_team()
+    members = team.list_members()
+
+    return jsonify({
+        "success": True,
+        "teams": [
+            {
+                "team_id": team.team_id,
+                "members": members,
+            }
+        ]
+    })
+
+
 @app.route("/api/sessions/<session_id>/history", methods=["GET"])
 def api_session_history(session_id):
     """Get session message history."""
@@ -150,6 +205,7 @@ def api_chat():
     data = request.json or {}
     session_id = data.get("session_id")
     message = data.get("message", "")
+    agent_id = data.get("agent", "__default__")
     
     if not message:
         return jsonify({"error": "Message is required"}), 400
@@ -174,7 +230,10 @@ def api_chat():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(run_agent_async(messages, q))
+            if agent_id == "__default__":
+                loop.run_until_complete(run_agent_async(messages, q))
+            else:
+                loop.run_until_complete(run_team_agent_async(agent_id, message, messages, q))
         finally:
             loop.close()
     
@@ -185,7 +244,7 @@ def api_chat():
     def generate():
         while True:
             try:
-                event_type, data = q.get(timeout=60)
+                event_type, data = q.get(timeout=120)
                 
                 if event_type == "token":
                     yield f"event: token\ndata: {json.dumps({'token': data['content']})}\n\n"
@@ -216,6 +275,51 @@ def api_chat():
             "X-Accel-Buffering": "no",
         }
     )
+
+
+async def run_team_agent_async(agent_name: str, message: str, messages: list, q: queue.Queue):
+    """Run a team agent and stream its response via SSE."""
+    try:
+        team = get_team()
+        member = team.get_member(agent_name)
+        
+        if not member:
+            q.put(("error", {"error": f"Agent '{agent_name}' not found"}))
+            q.put(("end", {"done": True}))
+            return
+        
+        if not member.enabled:
+            q.put(("error", {"error": f"Agent '{agent_name}' is disabled"}))
+            q.put(("end", {"done": True}))
+            return
+        
+        # Use talk_to for conversational interaction
+        from h_agent.team.team import TeamMessage, AgentRole
+        
+        msg = TeamMessage(
+            msg_id=f"web-{os.urandom(4).hex()}",
+            sender="user",
+            receiver=agent_name,
+            role=AgentRole.COORDINATOR,
+            type="dialog",
+            content=message,
+        )
+        
+        result = member.handle_message(msg)
+        
+        if result.success:
+            # Stream the response as tokens
+            content = result.content or ""
+            if content:
+                q.put(("token", {"content": content}))
+        else:
+            q.put(("error", {"error": result.error or "Unknown error"}))
+        
+        q.put(("end", {"done": True}))
+        
+    except Exception as e:
+        q.put(("error", {"error": str(e)}))
+        q.put(("end", {"done": True}))
 
 @app.route("/api/sessions/<session_id>", methods=["DELETE"])
 def api_delete_session(session_id):
