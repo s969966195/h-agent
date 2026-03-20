@@ -7,6 +7,8 @@ Supports:
   - Daemon control (start, status, stop)
   - Session management (list, create, history, delete)
   - Run and chat with agent
+
+Cross-platform: supports Linux/macOS (Unix) and Windows.
 """
 
 import os
@@ -24,8 +26,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-# Paths
-PID_FILE = str(Path.home() / ".h-agent" / "daemon.pid")
+from h_agent.platform_utils import (
+    IS_WINDOWS, daemon_pid_file, start_daemon_subprocess,
+    stop_process, is_process_alive, get_config_dir
+)
+
+# Paths - use platform-aware PID file
+PID_FILE = str(daemon_pid_file())
 DAEMON_PORT = int(os.environ.get("H_AGENT_PORT", 19527))
 
 # Import from core
@@ -61,7 +68,7 @@ def cmd_config_wizard(args) -> int:
 # ============================================================
 
 def daemon_status() -> dict:
-    """Check daemon status."""
+    """Check daemon status (cross-platform)."""
     pid_file = Path(PID_FILE)
     if not pid_file.exists():
         return {"running": False}
@@ -72,10 +79,17 @@ def daemon_status() -> dict:
         pid = data.get("pid", 0)
         port = data.get("port", DAEMON_PORT)
 
-        # Check if process is alive
-        os.kill(pid, 0)
-        return {"running": True, "pid": pid, "port": port}
-    except (ValueError, ProcessLookupError, PermissionError, json.JSONDecodeError):
+        # Check if process is alive (cross-platform)
+        if is_process_alive(pid):
+            return {"running": True, "pid": pid, "port": port}
+        
+        # Process dead but PID file exists - clean up
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
+        return {"running": False}
+    except (ValueError, ProcessLookupError, PermissionError, json.JSONDecodeError, OSError):
         # Clean up stale PID file
         try:
             pid_file.unlink()
@@ -85,21 +99,20 @@ def daemon_status() -> dict:
 
 
 def start_daemon():
-    """Start the daemon in background."""
+    """Start the daemon in background (cross-platform)."""
     status = daemon_status()
     if status.get("running"):
         print(f"Daemon already running (PID: {status['pid']}, Port: {status['port']})")
         return 0
 
-    # Start daemon as subprocess
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "h_agent.daemon.server"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True
-    )
+    # Use platform-aware subprocess start
+    pid = start_daemon_subprocess(sys.executable, DAEMON_PORT)
+    if pid is None:
+        print("Failed to start daemon (subprocess error)")
+        return 1
 
-    # Wait for daemon to start
+    # Wait for daemon to write its PID file
+    pid_file = Path(PID_FILE)
     for _ in range(20):
         time.sleep(0.25)
         new_status = daemon_status()
@@ -112,7 +125,7 @@ def start_daemon():
 
 
 def stop_daemon():
-    """Stop the daemon."""
+    """Stop the daemon (cross-platform)."""
     status = daemon_status()
     if not status.get("running"):
         print("Daemon not running")
@@ -123,14 +136,18 @@ def stop_daemon():
             pass
         return 0
 
-    try:
-        os.kill(status["pid"], signal.SIGTERM)
-        time.sleep(0.5)
+    pid = status["pid"]
+    if stop_process(pid, timeout=2.0):
+        # Clean up PID file
+        try:
+            Path(PID_FILE).unlink()
+        except OSError:
+            pass
         print("Daemon stopped")
         return 0
-    except ProcessLookupError:
-        print("Daemon not found (stale PID)")
-        return 0
+    else:
+        print(f"Failed to stop daemon (PID: {pid}). You may need to stop it manually.")
+        return 1
 
 
 def cmd_start(args) -> int:

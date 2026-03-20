@@ -3,6 +3,7 @@
 h_agent/daemon/server.py - Backend daemon service.
 
 Uses TCP socket for IPC (more compatible than Unix sockets).
+Cross-platform: works on Linux/macOS/Windows.
 """
 
 import asyncio
@@ -15,10 +16,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 
+from h_agent.platform_utils import daemon_pid_file, IS_WINDOWS
+
 # Configuration
 DAEMON_PORT = int(os.environ.get("H_AGENT_PORT", 19527))
-PID_FILE = str(Path.home() / ".h-agent" / "daemon.pid")
-SESSION_DIR = Path.home() / ".h-agent" / "sessions"
+PID_FILE = str(daemon_pid_file())
+SESSION_DIR = daemon_pid_file().parent / "sessions"
 
 
 class SessionManager:
@@ -291,8 +294,19 @@ def run_daemon(port: int = DAEMON_PORT):
         daemon.stop()
         sys.exit(0)
     
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Register signal handlers (Unix-style signals not fully functional on Windows)
+    if not IS_WINDOWS:
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+    else:
+        # On Windows, handle CTRL_C_EVENT
+        def windows_signal_handler(sig):
+            daemon.stop()
+            sys.exit(0)
+        try:
+            signal.signal(signal.CTRL_C_EVENT, windows_signal_handler)
+        except (AttributeError, ValueError):
+            pass  # Not all Windows versions support this
     
     asyncio.run(daemon.start())
 

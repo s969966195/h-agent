@@ -2,6 +2,69 @@
 
 OpenAI-powered coding agent harness with modular architecture.
 
+*"时间不在于你拥有多少，而在于你如何使用。"*
+
+---
+
+## 安装
+
+```bash
+pip install h-agent
+```
+
+或从源码安装：
+
+```bash
+git clone https://github.com/user/h-agent.git
+cd h-agent
+pip install -e .
+```
+
+### Windows 安装
+
+h-agent 支持 Windows (PowerShell/CMD)，但有一些注意事项：
+
+#### 前置依赖
+
+1. **Python 3.10+** - 从 [python.org](https://www.python.org/downloads/) 安装，**务必勾选 "Add Python to PATH"**
+2. **Git** - 从 [git-scm.com](https://git-scm.com/download/win) 安装
+
+#### 使用 PowerShell 安装
+
+```powershell
+# 克隆项目
+git clone https://github.com/user/h-agent.git
+cd h-agent
+
+# 创建虚拟环境（推荐）
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 安装
+pip install -e .
+
+# 初始化配置
+h-agent init
+```
+
+#### 使用 CMD 安装
+
+```cmd
+git clone https://github.com/user/h-agent.git
+cd h-agent
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -e .
+h-agent init
+```
+
+#### Windows 注意事项
+
+- h-agent 在 Windows 上使用 TCP 端口（而非 Unix Socket）进行进程间通信
+- 配置文件存储在 `%APPDATA%\h-agent\` 目录
+- 推荐使用 **PowerShell** 而非 CMD 以获得更好的兼容性
+- 部分 Unix 特定命令（如 `which`, `grep`）在 Windows 上不可用，h-agent 会自动使用替代方案
+
 ## 项目介绍
 
 `h-agent` 是一个基于 AI API 的编程智能体框架，提供模块化架构，支持 CLI 交互、工具调用、会话管理、子智能体等特性。

@@ -9,11 +9,15 @@ Tools:
 - git_pull: Pull from remote
 - git_log: Show commit log
 - git_branch: List/create/delete branches
+
+Cross-platform: works with git on Windows (via CMD/PowerShell).
 """
 
 import subprocess
-import json
+import shutil
 from typing import Callable, Dict, List, Any
+
+from h_agent.platform_utils import IS_WINDOWS
 
 # ============================================================
 # Tool Definitions (OpenAI function calling format)
@@ -135,14 +139,22 @@ TOOLS: List[Dict[str, Any]] = [
 # ============================================================
 
 def _run_git(args: List[str], cwd: str = ".") -> str:
-    """Run a git command and return output."""
+    """Run a git command and return output (cross-platform)."""
+    # Check git is available
+    git_path = shutil.which("git")
+    if not git_path:
+        return "Error: git not found. Is Git installed?"
+    
     try:
+        # Use shell=True on Windows for better compatibility
+        # Also on Unix for consistency with git's own shell integration
         result = subprocess.run(
             ["git"] + args,
             cwd=cwd,
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=60,
+            shell=IS_WINDOWS
         )
         output = result.stdout + result.stderr
         if not output:

@@ -7,12 +7,17 @@ Tools:
 - shell_env: Show environment variables
 - shell_cd: Change working directory (for the agent session)
 - shell_which: Find executable path
+
+Cross-platform: supports bash/zsh (Unix) and PowerShell/CMD (Windows).
 """
 
 import os
 import subprocess
 import json
+import shutil
 from typing import Callable, Dict, List, Any
+
+from h_agent.platform_utils import IS_WINDOWS, get_shell, which, which_all
 
 # Track current working directory for the agent session
 _CURRENT_CWD = os.getcwd()
@@ -131,11 +136,24 @@ def tool_shell_run(
     """Execute a shell command with safety checks."""
     global _CURRENT_CWD
     
-    # Check for dangerous commands
+    # Check for dangerous commands (normalize for cross-platform check)
     lower_cmd = command.lower()
     for dangerous in _DANGEROUS_PATTERNS:
         if dangerous in lower_cmd:
             return f"Error: Dangerous command blocked: {command[:50]}..."
+    
+    # Windows-specific dangerous patterns
+    if IS_WINDOWS:
+        windows_dangerous = [
+            "rm -rf",  # Not valid on Windows CMD but still check
+            "del /f /s /q c:",
+            "format",
+            "rmdir /s /q",
+            "icacls . /grant everyone",
+        ]
+        for dangerous in windows_dangerous:
+            if dangerous in command.lower():
+                return f"Error: Dangerous command blocked: {command[:50]}..."
     
     # Check for suspicious commands
     warnings = []
@@ -151,9 +169,11 @@ def tool_shell_run(
         work_dir = os.path.join(_CURRENT_CWD, work_dir)
     
     try:
+        # On Windows, use shell=True to go through cmd.exe by default
+        # On Unix, also use shell=True for consistency
         result = subprocess.run(
             command,
-            shell=shell,
+            shell=True,
             cwd=work_dir,
             capture_output=True,
             text=True,
@@ -229,19 +249,25 @@ def tool_shell_cd(path: str) -> str:
 
 
 def tool_shell_which(command: str, all: bool = False) -> str:
-    """Find executable path."""
+    """Find executable path (cross-platform)."""
     try:
-        result = subprocess.run(
-            f"which {'-a' if all else ''} {command}".strip(),
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        output = result.stdout.strip()
-        if not output:
-            return f"Command not found: {command}"
-        return output
+        if all:
+            paths = which_all(command)
+            if not paths:
+                return f"Command not found: {command}"
+            # Deduplicate while preserving order
+            seen = set()
+            unique_paths = []
+            for p in paths:
+                if p not in seen:
+                    seen.add(p)
+                    unique_paths.append(p)
+            return "\n".join(unique_paths)
+        else:
+            path = which(command)
+            if not path:
+                return f"Command not found: {command}"
+            return path
     except Exception as e:
         return f"Error: {e}"
 

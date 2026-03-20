@@ -3,6 +3,7 @@
 h_agent/daemon/client.py - Client for communicating with daemon.
 
 Uses TCP socket to send JSON-RPC style requests.
+Cross-platform: works on Linux/macOS/Windows.
 """
 
 import asyncio
@@ -11,8 +12,10 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
+from h_agent.platform_utils import daemon_pid_file
+
 DAEMON_PORT = int(os.environ.get("H_AGENT_PORT", 19527))
-PID_FILE = str(Path.home() / ".h-agent" / "daemon.pid")
+PID_FILE = str(daemon_pid_file())
 TIMEOUT = 30.0
 
 

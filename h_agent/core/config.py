@@ -14,11 +14,14 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
+from h_agent.platform_utils import get_config_dir, IS_WINDOWS
+
 # ============================================================
 # Paths
 # ============================================================
 
-AGENT_CONFIG_DIR = Path.home() / ".h-agent"
+# Use platform-aware config directory (~/.h-agent on Unix, %APPDATA%/h-agent on Windows)
+AGENT_CONFIG_DIR = get_config_dir()
 AGENT_CONFIG_FILE = AGENT_CONFIG_DIR / "config.yaml"
 AGENT_SECRETS_FILE = AGENT_CONFIG_DIR / "secrets.yaml"
 
