@@ -7,6 +7,7 @@ Main entry point for h_agent CLI.
 
 import os
 import sys
+import json
 from pathlib import Path
 
 # Add parent to path for imports when running directly
@@ -18,7 +19,64 @@ load_dotenv(override=True)
 
 # Import from core
 from h_agent.core.tools import agent_loop, TOOLS, TOOL_HANDLERS, execute_tool_call
-from h_agent.core.config import MODEL, OPENAI_BASE_URL
+from h_agent.core.config import (
+    MODEL, OPENAI_BASE_URL, OPENAI_API_KEY,
+    get_config, set_config, list_config, clear_secret,
+    AGENT_CONFIG_FILE, AGENT_SECRETS_FILE
+)
+
+
+def cmd_config(args) -> int:
+    """Handle config command."""
+    if args.show:
+        config = list_config()
+        print("=== h-agent Configuration ===")
+        if "openai_api_key" in config:
+            print(f"  OPENAI_API_KEY: {config['openai_api_key']}")
+        if "openai_base_url" in config:
+            print(f"  OPENAI_BASE_URL: {config['openai_base_url']}")
+        if "model_id" in config:
+            print(f"  MODEL_ID: {config['model_id']}")
+        print()
+        print(f"Config file: {AGENT_CONFIG_FILE}")
+        print(f"Secrets file: {AGENT_SECRETS_FILE}")
+        return 0
+
+    if args.set_api_key:
+        key = args.set_api_key
+        if key == "__prompt__":
+            import getpass
+            key = getpass.getpass("Enter API key: ")
+        set_config("OPENAI_API_KEY", key, secure=True)
+        print("API key saved securely.")
+        return 0
+
+    if args.clear_key:
+        clear_secret("OPENAI_API_KEY")
+        print("API key cleared.")
+        return 0
+
+    if args.set_base_url:
+        set_config("OPENAI_BASE_URL", args.set_base_url)
+        print(f"Base URL set to: {args.set_base_url}")
+        return 0
+
+    if args.set_model:
+        set_config("MODEL_ID", args.set_model)
+        print(f"Model set to: {args.set_model}")
+        return 0
+
+    # No subcommand: show help
+    print("h-agent config - Configuration management")
+    print()
+    print("Usage:")
+    print("  h-agent config --show              Show current config")
+    print("  h-agent config --api-key KEY       Set API key")
+    print("  h-agent config --api-key __prompt__  Set API key (prompt for input)")
+    print("  h-agent config --clear-key         Remove stored API key")
+    print("  h-agent config --base-url URL      Set API base URL")
+    print("  h-agent config --model MODEL       Set model ID")
+    return 0
 
 
 def get_system_prompt() -> str:
@@ -69,8 +127,8 @@ def interactive_mode():
         try:
             from openai import OpenAI
             client = OpenAI(
-                api_key=os.getenv("OPENAI_API_KEY", "sk-dummy"),
-                base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                api_key=OPENAI_API_KEY,
+                base_url=OPENAI_BASE_URL,
             )
             
             while True:
@@ -93,7 +151,6 @@ def interactive_mode():
                     break
                 
                 # Execute tool calls
-                import json
                 for tool_call in message.tool_calls:
                     args = json.loads(tool_call.function.arguments)
                     key_arg = args.get('command') or args.get('path') or args.get('pattern', '')
@@ -117,18 +174,35 @@ def interactive_mode():
 
 
 def main():
-    """Main entry point."""
-    if len(sys.argv) > 1:
-        # Single command mode
-        query = " ".join(sys.argv[1:])
-        print(f"Running: {query}")
-        # TODO: Implement single command mode
-        print("Single command mode not yet implemented. Use interactive mode.")
-        sys.exit(1)
-    else:
-        # Interactive mode
-        interactive_mode()
+    """Main entry point with argparse."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description="h-agent: OpenAI-powered coding agent harness",
+        prog="h-agent"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    
+    # Config subcommand
+    config_parser = subparsers.add_parser("config", help="Configuration management")
+    config_parser.add_argument("--show", action="store_true", help="Show current configuration")
+    config_parser.add_argument("--api-key", dest="set_api_key", metavar="KEY",
+        help="Set API key (use __prompt__ for secure input)")
+    config_parser.add_argument("--clear-key", action="store_true", help="Remove stored API key")
+    config_parser.add_argument("--base-url", dest="set_base_url", metavar="URL",
+        help="Set API base URL")
+    config_parser.add_argument("--model", dest="set_model", metavar="MODEL",
+        help="Set model ID")
+    
+    args = parser.parse_args()
+    
+    if args.command == "config":
+        return cmd_config(args)
+    
+    # Interactive mode (default)
+    interactive_mode()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
