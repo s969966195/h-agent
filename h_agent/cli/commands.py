@@ -200,6 +200,109 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_autostart(args) -> int:
+    """Handle autostart command — install/uninstall daemon auto-start."""
+    from h_agent.daemon.recovery import AutoStartManager, AutoStartConfig
+
+    mgr = AutoStartManager()
+
+    action = args.autostart_action
+
+    if action == "install":
+        if mgr.is_installed():
+            print("Auto-start already installed.")
+            return 0
+        if mgr.install():
+            _ok("Auto-start installed.")
+            if IS_MACOS:
+                print("  Note: On macOS, you may need to grant Full Disk Access")
+                print("  to the LaunchAgent for session recovery to work.")
+            return 0
+        _err("Failed to install auto-start. Check permissions.")
+        return 1
+
+    if action == "uninstall":
+        if not mgr.is_installed():
+            print("Auto-start not installed.")
+            return 0
+        if mgr.uninstall():
+            _ok("Auto-start uninstalled.")
+            return 0
+        _err("Failed to uninstall.")
+        return 1
+
+    if action == "status":
+        installed = mgr.is_installed()
+        if installed:
+            _ok("Auto-start is installed.")
+        else:
+            print("Auto-start is NOT installed.")
+            print()
+            print("Install with: h-agent autostart install")
+            print("Supports: macOS (LaunchAgent), Linux (systemd), Windows (Registry)")
+        return 0
+
+    return 0
+
+
+def cmd_team(args) -> int:
+    """Handle team command — multi-agent collaboration."""
+    from h_agent.team.team import AgentTeam, AgentRole
+    from h_agent.team.protocol import TeamProtocol
+
+    action = args.team_action
+
+    if action == "list":
+        team = AgentTeam()
+        members = team.list_members()
+        if not members:
+            print("No agents registered in the team.")
+            print()
+            print("Register agents programmatically:")
+            print("  from h_agent.team import AgentTeam, AgentRole")
+            print("  team = AgentTeam()")
+            print("  team.register('coder', AgentRole.CODER, my_handler)")
+            return 0
+        print(f"Team members ({len(members)}):")
+        for m in members:
+            status = "✅" if m["enabled"] else "❌"
+            print(f"  {status} {m['name']} [{m['role']}] — {m['description']}")
+        return 0
+
+    if action == "status":
+        team = AgentTeam()
+        status = team.get_task_status("")
+        history = team.list_history(limit=5)
+        pending = team.list_pending_tasks()
+        print(f"Team: {team.team_id}")
+        print(f"  Members: {len(team.members)}")
+        print(f"  Pending tasks: {len(pending)}")
+        print(f"  History entries: {len(history)}")
+        return 0
+
+    if action == "init":
+        from h_agent.platform_utils import IS_WINDOWS, IS_MACOS, IS_LINUX
+        print(f"Initializing team workspace...")
+        if IS_MACOS:
+            print("  Platform: macOS")
+        elif IS_LINUX:
+            print("  Platform: Linux")
+        elif IS_WINDOWS:
+            print("  Platform: Windows")
+        print(f"  Team dir: {__import__('pathlib').Path.home() / '.h-agent' / 'team'}")
+        team = AgentTeam(team_id="default")
+        _ok("Team initialized.")
+        return 0
+
+    print("h-agent team - Multi-agent collaboration")
+    print()
+    print("Usage:")
+    print("  h-agent team list              List team members")
+    print("  h-agent team status           Show team status")
+    print("  h-agent team init             Initialize team workspace")
+    return 0
+
+
 def cmd_stop(args) -> int:
     """Handle stop command."""
     return stop_daemon()
@@ -463,6 +566,205 @@ def cmd_session_group(args) -> int:
                 print(f"  {s['session_id']}  {s.get('name', 'unnamed'):<20}")
         return 0
 
+    return 0
+
+
+# ============================================================
+# Memory
+# ============================================================
+
+def cmd_memory(args) -> int:
+    """Handle memory command."""
+    from h_agent.memory.long_term import (
+        remember, recall, forget, list_memories,
+        search_memory, memory_dump, memory_stats, MemoryType
+    )
+    from h_agent.memory.retriever import MemoryRetriever
+
+    action = args.memory_action
+
+    # ---- list ----
+    if action == "list":
+        mem_type = args.list_type
+        stats = memory_stats()
+        print("=== Memory Stats ===")
+        total = 0
+        for t, count in sorted(stats.items()):
+            if t == "all":
+                continue
+            marker = " ← filtered" if mem_type and mem_type != "all" and t != mem_type else ""
+            print(f"  {t}: {count} entries{marker}")
+            total += count
+        print(f"  TOTAL: {total}")
+        print()
+        entries = list_memories(mem_type) if mem_type and mem_type != "all" else None
+
+        def print_entries(entries_or_dict, type_label=""):
+            if isinstance(entries_or_dict, list):
+                # Flat list of entries
+                for e in entries_or_dict:
+                    t = e.get("type", type_label)
+                    key = e.get("key", "")
+                    value = e.get("value", "")
+                    reason = e.get("reason", "")
+                    tags = e.get("tags", [])
+                    ts = e.get("created_at", "")[:19]
+                    tag_str = f" [{', '.join('#'+t for t in tags)}]" if tags else ""
+                    reason_str = f" reason: {reason}" if reason else ""
+                    print(f"  [{t}] {key}: {value}{reason_str}{tag_str} ({ts})")
+            elif isinstance(entries_or_dict, dict):
+                # Dict from list_memories when no filter
+                for t, ents in entries_or_dict.items():
+                    if not ents:
+                        continue
+                    print(f"\n## {t.upper()}")
+                    print_entries(ents, t)
+
+        if mem_type and mem_type != "all":
+            entries = list_memories(mem_type)
+            print_entries(entries, type_label=mem_type)
+        else:
+            # Print all types
+            for t in ["user", "project", "decision", "fact", "error"]:
+                entries = list_memories(t)
+                if entries:
+                    print(f"\n## {t.upper()}")
+                    print_entries(entries, t)
+        return 0
+
+    # ---- add ----
+    if action == "add":
+        mem_type = args.add_type
+        key = args.add_key
+        value = args.add_value
+        reason = args.reason
+        tags = args.tags.split(",") if args.tags else None
+
+        valid_types = ["user", "project", "decision", "fact", "error"]
+        if mem_type not in valid_types:
+            _err(f"Invalid type '{mem_type}'. Choose from: {', '.join(valid_types)}")
+            return 1
+
+        if not key:
+            _err("Key cannot be empty")
+            return 1
+
+        if remember(mem_type, key, value, reason=reason, tags=tags):
+            _ok(f"Stored: [{mem_type}] {key} = {value}")
+            if reason:
+                print(f"  reason: {reason}")
+            if tags:
+                print(f"  tags: {', '.join('#'+t for t in tags)}")
+        else:
+            _err("Failed to store memory")
+            return 1
+        return 0
+
+    # ---- get ----
+    if action == "get":
+        key = args.get_key
+        found = False
+        for mem_type in ["user", "project", "decision", "fact", "error"]:
+            entry = recall(mem_type, key)
+            if entry is not None:
+                print(f"[{mem_type}] {key} = {entry}")
+                found = True
+        if not found:
+            _err(f"Memory not found: {key}")
+            return 1
+        return 0
+
+    # ---- delete ----
+    if action == "delete":
+        mem_type = args.delete_type
+        key = args.delete_key
+        valid_types = ["user", "project", "decision", "fact", "error"]
+        if mem_type not in valid_types:
+            _err(f"Invalid type '{mem_type}'. Choose from: {', '.join(valid_types)}")
+            return 1
+        if forget(mem_type, key):
+            _ok(f"Deleted: [{mem_type}] {key}")
+        else:
+            _err(f"Memory not found: [{mem_type}] {key}")
+            return 1
+        return 0
+
+    # ---- search ----
+    if action == "search":
+        query = args.search_query
+        if not query:
+            _err("Search query is required")
+            return 1
+
+        # Search long-term memories
+        lt_results = search_memory(query)
+        if lt_results:
+            print(f"\n=== Long-term Memory Results ({len(lt_results)}) ===")
+            for r in lt_results[:10]:
+                t = r.get("type", "?")
+                key = r.get("key", "")
+                value = r.get("value", "")
+                reason = r.get("reason", "")
+                reason_str = f" — {reason}" if reason else ""
+                print(f"  [{t}] {key}: {value}{reason_str}")
+        else:
+            print("No long-term memory results.")
+
+        # Search sessions
+        if args.search_sessions:
+            retriever = MemoryRetriever()
+            session_results = retriever.search_sessions(query, days_back=args.days or 30)
+            if session_results:
+                print(f"\n=== Session History Results ({len(session_results)}) ===")
+                for r in session_results[:5]:
+                    sid = r.get("session_id", "?")
+                    excerpts = r.get("excerpts", [])
+                    print(f"  Session {sid} (score={r.get('score', 0)}):")
+                    for ex in excerpts[:2]:
+                        print(f"    ...{ex}...")
+            else:
+                print("\nNo session history results.")
+
+        # Search summaries
+        if args.search_summaries:
+            retriever = MemoryRetriever()
+            summary_results = retriever.search_summaries(query)
+            if summary_results:
+                print(f"\n=== Summary Results ({len(summary_results)}) ===")
+                for r in summary_results[:5]:
+                    sid = r.get("session_id", "?")
+                    print(f"  Session {sid}:")
+                    print(f"    {r.get('excerpt', '')[:200]}")
+            else:
+                print("\nNo summary results.")
+        return 0
+
+    # ---- dump ----
+    if action == "dump":
+        mem_type = args.dump_type if args.dump_type != "all" else None
+        text = memory_dump(mem_type=mem_type)
+        print(text)
+        return 0
+
+    # Default help
+    print("h-agent memory - Long-term memory management")
+    print()
+    print("Usage:")
+    print("  h-agent memory list [--type TYPE]           List memories")
+    print("  h-agent memory add <TYPE> <KEY> <VALUE>     Store a memory")
+    print("  h-agent memory get <KEY>                    Get a memory by key")
+    print("  h-agent memory delete <TYPE> <KEY>          Delete a memory")
+    print("  h-agent memory search <QUERY>               Search memories")
+    print("  h-agent memory dump [--type TYPE]          Dump all as text")
+    print()
+    print("Memory types: user, project, decision, fact, error")
+    print()
+    print("Examples:")
+    print("  h-agent memory add user language Chinese")
+    print("  h-agent memory add decision use_sqlite 'Simplicity' --reason 'MVP phase'")
+    print("  h-agent memory add project framework FastAPI --tags api,python")
+    print("  h-agent memory search authentication")
+    print("  h-agent memory dump --type decision")
     return 0
 
 
@@ -878,6 +1180,318 @@ def cmd_config(args) -> int:
 
 
 # ============================================================
+# Template Management
+# ============================================================
+
+TEMPLATE_DIR = Path.home() / ".h-agent" / "templates"
+
+
+def _load_template(name: str) -> Optional[dict]:
+    """Load a template by name."""
+    import yaml
+    template_path = TEMPLATE_DIR / f"{name}.yaml"
+    if not template_path.exists():
+        return None
+    try:
+        with open(template_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except Exception:
+        return None
+
+
+def _list_templates() -> list:
+    """List all available templates."""
+    import yaml
+    templates = []
+    if not TEMPLATE_DIR.exists():
+        return templates
+    for f in sorted(TEMPLATE_DIR.glob("*.yaml")):
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                data = yaml.safe_load(fp)
+                templates.append({
+                    "name": f.stem,
+                    "display_name": data.get("name", f.stem),
+                    "description": data.get("description", ""),
+                    "version": data.get("version", "1.0"),
+                    "path": f,
+                })
+        except Exception:
+            templates.append({
+                "name": f.stem,
+                "display_name": f.stem,
+                "description": "(parse error)",
+                "version": "?",
+                "path": f,
+            })
+    return templates
+
+
+def cmd_template(args) -> int:
+    """Handle template command."""
+    action = args.template_action
+
+    if action == "list":
+        templates = _list_templates()
+        if not templates:
+            print("No templates found.")
+            print(f"  Templates directory: {TEMPLATE_DIR}")
+            print("  Create templates as .yaml files in that directory.")
+            return 0
+        print(f"Available templates ({len(templates)}):")
+        print()
+        for t in templates:
+            print(f"  {t['name']}")
+            print(f"    Name: {t['display_name']}")
+            print(f"    Description: {t['description']}")
+            print(f"    Version: {t['version']}")
+            print()
+        return 0
+
+    if action == "apply":
+        name = args.template_name
+        template = _load_template(name)
+        if not template:
+            _err(f"Template not found: {name}")
+            _err(f"Available templates: {', '.join(t['name'] for t in _list_templates())}")
+            return 1
+
+        print(f"Applying template: {template.get('name', name)}")
+        print(f"Description: {template.get('description', '')}")
+        print()
+
+        # Apply model if specified
+        if "recommended_model" in template:
+            model = template["recommended_model"]
+            print(f"Setting model to: {model}")
+            from h_agent.core import config as config_module
+            from importlib import reload
+            reload(config_module)
+            config_module.set_config("MODEL_ID", model)
+
+        # Apply config overrides
+        if "config" in template:
+            from importlib import reload as reload_module
+            from h_agent.core import config as config_module
+            reload_module(config_module)
+            for key, value in template["config"].items():
+                config_module.set_config(key.upper(), str(value))
+                print(f"  Config {key}: {value}")
+
+        _ok(f"Template '{name}' applied successfully!")
+        print()
+        print("Note: System prompt will be loaded when you start a new session.")
+        return 0
+
+    if action == "show":
+        name = args.template_name
+        template = _load_template(name)
+        if not template:
+            _err(f"Template not found: {name}")
+            return 1
+        print(f"=== Template: {template.get('name', name)} ===")
+        print(f"Description: {template.get('description', '')}")
+        print(f"Version: {template.get('version', '1.0')}")
+        print()
+        print("System Prompt:")
+        print("-" * 40)
+        print(template.get("system_prompt", "(none)"))
+        print("-" * 40)
+        print()
+        print("Tools:")
+        for tool in template.get("tools", []):
+            print(f"  - {tool}")
+        print()
+        if "recommended_model" in template:
+            print(f"Recommended Model: {template['recommended_model']}")
+        if "config" in template:
+            print("Config overrides:")
+            for k, v in template["config"].items():
+                print(f"  {k}: {v}")
+        return 0
+
+    if action == "create":
+        name = args.template_name
+        template_path = TEMPLATE_DIR / f"{name}.yaml"
+        if template_path.exists():
+            _err(f"Template already exists: {name}")
+            return 1
+        TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+        # Copy from example
+        example = """name: {name}
+description: Your template description here
+version: "1.0"
+
+system_prompt: |
+  Define your agent's system prompt here.
+
+tools:
+  - read
+  - write
+  - bash
+
+recommended_model: gpt-4o-mini
+
+config:
+  max_tool_output: 50000
+  context_safe_limit: 120000
+"""
+        template_path.write_text(example.format(name=name), encoding="utf-8")
+        _ok(f"Created template: {name}")
+        print(f"  Edit: {template_path}")
+        return 0
+
+    if action == "delete":
+        name = args.template_name
+        template_path = TEMPLATE_DIR / f"{name}.yaml"
+        if not template_path.exists():
+            _err(f"Template not found: {name}")
+            return 1
+        template_path.unlink()
+        _ok(f"Deleted template: {name}")
+        return 0
+
+    print("h-agent template - Agent template management")
+    print()
+    print("Usage:")
+    print("  h-agent template list                    List all templates")
+    print("  h-agent template show <name>            Show template details")
+    print("  h-agent template apply <name>           Apply a template")
+    print("  h-agent template create <name>          Create new template")
+    print("  h-agent template delete <name>          Delete a template")
+    print()
+    print(f"Template directory: {TEMPLATE_DIR}")
+    return 0
+
+
+# ============================================================
+# Model Management
+# ============================================================
+
+MODELS_CONFIG = Path.home() / ".h-agent" / "models.yaml"
+
+
+def _load_models_config() -> dict:
+    """Load models configuration."""
+    import yaml
+    if MODELS_CONFIG.exists():
+        with open(MODELS_CONFIG, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+def cmd_model(args) -> int:
+    """Handle model command."""
+    action = args.model_action
+
+    models_cfg = _load_models_config()
+    models = models_cfg.get("models", {})
+    providers = models_cfg.get("providers", {})
+
+    if action == "list":
+        if not models:
+            print("No models configured.")
+            print(f"  Models config: {MODELS_CONFIG}")
+            return 0
+
+        # Group by provider
+        by_provider = {}
+        for model_id, model_cfg in models.items():
+            provider = model_cfg.get("provider", "unknown")
+            by_provider.setdefault(provider, []).append((model_id, model_cfg))
+
+        print("Available models:")
+        print()
+
+        for provider, model_list in sorted(by_provider.items()):
+            provider_info = providers.get(provider, {})
+            provider_name = provider_info.get("name", provider)
+            print(f"[{provider_name}]")
+            for model_id, cfg in model_list:
+                desc = cfg.get("description", "")
+                context = cfg.get("context_window", "?")
+                print(f"  {model_id}")
+                if desc:
+                    print(f"    {desc}")
+                print(f"    Context: {context}")
+            print()
+
+        # Show current model
+        from importlib import reload
+        from h_agent.core import config as config_module
+        reload(config_module)
+        current = config_module.MODEL_ID
+        print(f"Current model: {current}")
+        return 0
+
+    if action == "switch":
+        model_id = args.model_name
+        if model_id not in models:
+            _err(f"Unknown model: {model_id}")
+            print("Available models:")
+            for mid in models:
+                print(f"  - {mid}")
+            return 1
+
+        model_cfg = models[model_id]
+        base_url = model_cfg.get("base_url", "")
+        provider = model_cfg.get("provider", "")
+
+        print(f"Switching to model: {model_id}")
+        print(f"  Provider: {provider}")
+        print(f"  Base URL: {base_url}")
+
+        from importlib import reload
+        from h_agent.core import config as config_module
+        reload(config_module)
+
+        # Update model
+        config_module.set_config("MODEL_ID", model_id)
+
+        # Update base URL if specified
+        if base_url:
+            config_module.set_config("OPENAI_BASE_URL", base_url)
+
+        _ok(f"Model switched to: {model_id}")
+        print()
+        print("Note: If the provider requires an API key, make sure it's configured.")
+        return 0
+
+    if action == "info":
+        model_id = args.model_name
+        if model_id not in models:
+            _err(f"Unknown model: {model_id}")
+            return 1
+
+        cfg = models[model_id]
+        print(f"=== Model: {model_id} ===")
+        print(f"Name: {cfg.get('name', model_id)}")
+        print(f"Provider: {cfg.get('provider', 'unknown')}")
+        print(f"Description: {cfg.get('description', 'N/A')}")
+        print(f"API Type: {cfg.get('api_type', 'openai')}")
+        print(f"Base URL: {cfg.get('base_url', 'N/A')}")
+        print(f"Max Tokens: {cfg.get('max_tokens', 'N/A')}")
+        print(f"Context Window: {cfg.get('context_window', 'N/A')}")
+        return 0
+
+    if action == "add":
+        # Interactive add model
+        print("Add new model - feature coming soon")
+        print(f"  Edit models config: {MODELS_CONFIG}")
+        return 0
+
+    print("h-agent model - Model management")
+    print()
+    print("Usage:")
+    print("  h-agent model list                    List all available models")
+    print("  h-agent model switch <model>          Switch to a different model")
+    print("  h-agent model info <model>           Show model details")
+    print()
+    print(f"Models config: {MODELS_CONFIG}")
+    return 0
+
+
+# ============================================================
 # Plugin Management
 # ============================================================
 
@@ -1010,6 +1624,151 @@ def cmd_plugin(args) -> int:
 
 
 # ============================================================
+# Skills
+# ============================================================
+
+def cmd_skill(args) -> int:
+    """Handle skill command."""
+    from importlib import reload
+    from h_agent import skills as skills_module
+    reload(skills_module)
+
+    action = args.skill_action
+
+    if action == "list":
+        skills_module.load_all_skills()
+        skills = skills_module.list_skills(include_all=getattr(args, 'all', False))
+        if not skills:
+            print("No skills loaded.")
+            print("  Built-in skills: office (Word, Excel, PowerPoint)")
+            print("                    outlook (Mail, Calendar, Contacts)")
+            print("  Place skill packages in h_agent/skills/ to load custom skills.")
+            return 0
+        print(f"Skills ({len(skills)}):")
+        for s in skills:
+            platform = ", ".join(s.platforms)
+            deps_status = []
+            for dep, ok in s.check_dependencies().items():
+                deps_status.append(f"{dep}: {'✅' if ok else '❌'}")
+            status = "✅ enabled" if s.enabled else "❌ disabled"
+            available = "✅ available" if s.is_available() else "❌ unavailable"
+            print(f"  {s.name} v{s.version} [{status}] [{available}]")
+            print(f"    {s.description}")
+            print(f"    Category: {s.category} | Platform: {platform}")
+            print(f"    Dependencies: {', '.join(deps_status)}")
+            if s.tools:
+                tools = ", ".join(t.get("function", {}).get("name", "unknown") for t in s.tools)
+                print(f"    Tools: {tools}")
+        return 0
+
+    if action == "info":
+        skills_module.load_all_skills()
+        skill = skills_module.get_skill(args.skill_name)
+        if not skill:
+            _err(f"Skill not found: {args.skill_name}")
+            return 1
+        print(f"Skill: {skill.name}")
+        print(f"  Version: {skill.version}")
+        print(f"  Author: {skill.author}")
+        print(f"  Description: {skill.description}")
+        print(f"  Category: {skill.category}")
+        print(f"  Platforms: {', '.join(skill.platforms)}")
+        print(f"  Status: {'enabled' if skill.enabled else 'disabled'}")
+        print(f"  Installed: {skill.installed}")
+        if skill.path:
+            print(f"  Path: {skill.path}")
+        if skill.pip_package:
+            print(f"  Pip Package: {skill.pip_package}")
+        print(f"  Dependencies:")
+        for dep, ok in skill.check_dependencies().items():
+            status = "✅ installed" if ok else "❌ missing"
+            print(f"    - {dep}: {status}")
+        print(f"  Functions ({len(skill.functions)}):")
+        for func_name in skill.functions:
+            print(f"    - {func_name}")
+        return 0
+
+    if action == "enable":
+        skills_module.load_all_skills()
+        name = args.skill_name
+        if skills_module.enable_skill(name):
+            _ok(f"Enabled skill: {name}")
+        else:
+            _err(f"Skill not found: {name}")
+        return 0
+
+    if action == "disable":
+        skills_module.load_all_skills()
+        name = args.skill_name
+        if skills_module.disable_skill(name):
+            _ok(f"Disabled skill: {name}")
+        else:
+            _err(f"Skill not found: {name}")
+        return 0
+
+    if action == "install":
+        name = args.skill_name
+        package = getattr(args, 'package', None)
+        print(f"Installing skill: {name}")
+        if skills_module.install_skill(name, package):
+            _ok(f"Installed skill: {name}")
+            return 0
+        else:
+            _err(f"Failed to install skill: {name}")
+            return 1
+
+    if action == "uninstall":
+        name = args.skill_name
+        if skills_module.uninstall_skill(name):
+            _ok(f"Uninstalled skill: {name}")
+            return 0
+        else:
+            _err(f"Failed to uninstall skill: {name}")
+            return 1
+
+    if action == "run":
+        skills_module.load_all_skills()
+        name = args.skill_name
+        func_name = args.function_name
+        skill_args = args.args
+
+        try:
+            result = skills_module.call_skill_function(name, func_name, *skill_args)
+            if result is not None:
+                print(result)
+            return 0
+        except ValueError as e:
+            _err(str(e))
+            return 1
+        except Exception as e:
+            _err(f"Error running {name}.{func_name}: {e}")
+            return 1
+
+    print("h-agent skill - Skill management")
+    print()
+    print("Usage:")
+    print("  h-agent skill list [--all]                     List all skills")
+    print("  h-agent skill info <name>                      Show skill details")
+    print("  h-agent skill enable <name>                    Enable a skill")
+    print("  h-agent skill disable <name>                   Disable a skill")
+    print("  h-agent skill install <name> [--package NAME]  Install skill via pip")
+    print("  h-agent skill uninstall <name>                 Uninstall a skill")
+    print("  h-agent skill run <name> <func> [args...]      Run a skill function")
+    return 0
+
+
+# ============================================================
+# Web UI
+# ============================================================
+
+def cmd_web(args) -> int:
+    """Handle web command - start the Web UI server."""
+    from h_agent.web.server import run_server
+    run_server(port=args.port, open_browser=not args.no_browser)
+    return 0
+
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -1038,6 +1797,20 @@ def main():
     start_parser = subparsers.add_parser("start", help="Start daemon service")
     status_parser = subparsers.add_parser("status", help="Check daemon status")
     stop_parser = subparsers.add_parser("stop", help="Stop daemon service")
+
+    # ---- Autostart ----
+    autostart_parser = subparsers.add_parser("autostart", help="Daemon auto-start management")
+    autostart_subparsers = autostart_parser.add_subparsers(dest="autostart_action")
+    autostart_install = autostart_subparsers.add_parser("install", help="Install auto-start")
+    autostart_uninstall = autostart_subparsers.add_parser("uninstall", help="Uninstall auto-start")
+    autostart_status = autostart_subparsers.add_parser("status", help="Check auto-start status")
+
+    # ---- Team ----
+    team_parser = subparsers.add_parser("team", help="Multi-agent team management")
+    team_subparsers = team_parser.add_subparsers(dest="team_action")
+    team_list_parser = team_subparsers.add_parser("list", help="List team members")
+    team_status_parser = team_subparsers.add_parser("status", help="Show team status")
+    team_init_parser = team_subparsers.add_parser("init", help="Initialize team workspace")
 
     # ---- Logs ----
     logs_parser = subparsers.add_parser("logs", help="View daemon log")
@@ -1141,6 +1914,40 @@ def main():
     config_parser.add_argument("--import", dest="import_cfg", metavar="FILE",
         help="Import config from JSON file")
 
+    # ---- Memory ----
+    memory_parser = subparsers.add_parser("memory", help="Long-term memory management")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_action")
+
+    memory_list_parser = memory_subparsers.add_parser("list", help="List all memories")
+    memory_list_parser.add_argument("--type", dest="list_type", metavar="TYPE",
+        help="Filter by type: user, project, decision, fact, error")
+
+    memory_add_parser = memory_subparsers.add_parser("add", help="Store a memory")
+    memory_add_parser.add_argument("add_type", metavar="TYPE", help="Memory type")
+    memory_add_parser.add_argument("add_key", metavar="KEY", help="Memory key")
+    memory_add_parser.add_argument("add_value", metavar="VALUE", help="Memory value")
+    memory_add_parser.add_argument("--reason", help="Reason/explanation")
+    memory_add_parser.add_argument("--tags", help="Comma-separated tags")
+
+    memory_get_parser = memory_subparsers.add_parser("get", help="Get a memory by key")
+    memory_get_parser.add_argument("get_key", metavar="KEY", help="Memory key")
+
+    memory_delete_parser = memory_subparsers.add_parser("delete", help="Delete a memory")
+    memory_delete_parser.add_argument("delete_type", metavar="TYPE", help="Memory type")
+    memory_delete_parser.add_argument("delete_key", metavar="KEY", help="Memory key")
+
+    memory_search_parser = memory_subparsers.add_parser("search", help="Search memories")
+    memory_search_parser.add_argument("search_query", nargs="?", help="Search query")
+    memory_search_parser.add_argument("--sessions", action="store_true", dest="search_sessions",
+        help="Also search session history")
+    memory_search_parser.add_argument("--summaries", action="store_true", dest="search_summaries",
+        help="Also search LLM summaries")
+    memory_search_parser.add_argument("--days", type=int, help="Only search sessions from last N days")
+
+    memory_dump_parser = memory_subparsers.add_parser("dump", help="Dump memories as text")
+    memory_dump_parser.add_argument("--type", dest="dump_type", default="all",
+        help="Filter by type (default: all)")
+
     # ---- Plugin ----
     plugin_parser = subparsers.add_parser("plugin", help="Plugin management")
     plugin_subparsers = plugin_parser.add_subparsers(dest="plugin_action")
@@ -1156,9 +1963,58 @@ def main():
     plugin_uninstall_parser = plugin_subparsers.add_parser("uninstall", help="Uninstall a plugin")
     plugin_uninstall_parser.add_argument("plugin_name", help="Plugin name")
 
+    # ---- Skill ----
+    skill_parser = subparsers.add_parser("skill", help="Skill management")
+    skill_subparsers = skill_parser.add_subparsers(dest="skill_action")
+    skill_list_parser = skill_subparsers.add_parser("list", help="List all skills")
+    skill_list_parser.add_argument("--all", action="store_true", help="Include disabled skills")
+    skill_info_parser = skill_subparsers.add_parser("info", help="Show skill details")
+    skill_info_parser.add_argument("skill_name", help="Skill name")
+    skill_enable_parser = skill_subparsers.add_parser("enable", help="Enable a skill")
+    skill_enable_parser.add_argument("skill_name", help="Skill name")
+    skill_disable_parser = skill_subparsers.add_parser("disable", help="Disable a skill")
+    skill_disable_parser.add_argument("skill_name", help="Skill name")
+    skill_install_parser = skill_subparsers.add_parser("install", help="Install skill via pip")
+    skill_install_parser.add_argument("skill_name", help="Skill name")
+    skill_install_parser.add_argument("--package", help="Pip package name (default: h_agent_skill_<name>)")
+    skill_uninstall_parser = skill_subparsers.add_parser("uninstall", help="Uninstall a skill")
+    skill_uninstall_parser.add_argument("skill_name", help="Skill name")
+    skill_run_parser = skill_subparsers.add_parser("run", help="Run a skill function")
+    skill_run_parser.add_argument("skill_name", help="Skill name")
+    skill_run_parser.add_argument("function_name", help="Function name to run")
+    skill_run_parser.add_argument("args", nargs="*", help="Function arguments")
+
+    # ---- Template ----
+    template_parser = subparsers.add_parser("template", help="Agent template management")
+    template_subparsers = template_parser.add_subparsers(dest="template_action")
+    template_list_parser = template_subparsers.add_parser("list", help="List all templates")
+    template_apply_parser = template_subparsers.add_parser("apply", help="Apply a template")
+    template_apply_parser.add_argument("template_name", help="Template name")
+    template_show_parser = template_subparsers.add_parser("show", help="Show template details")
+    template_show_parser.add_argument("template_name", help="Template name")
+    template_create_parser = template_subparsers.add_parser("create", help="Create a new template")
+    template_create_parser.add_argument("template_name", help="Template name")
+    template_delete_parser = template_subparsers.add_parser("delete", help="Delete a template")
+    template_delete_parser.add_argument("template_name", help="Template name")
+
+    # ---- Model ----
+    model_parser = subparsers.add_parser("model", help="Model management")
+    model_subparsers = model_parser.add_subparsers(dest="model_action")
+    model_list_parser = model_subparsers.add_parser("list", help="List all available models")
+    model_switch_parser = model_subparsers.add_parser("switch", help="Switch to a different model")
+    model_switch_parser.add_argument("model_name", help="Model name")
+    model_info_parser = model_subparsers.add_parser("info", help="Show model details")
+    model_info_parser.add_argument("model_name", help="Model name")
+    model_add_parser = model_subparsers.add_parser("add", help="Add a new model")
+
     # ---- Init ----
     init_parser = subparsers.add_parser("init", help="Initialize h-agent with interactive setup")
     init_parser.add_argument("--quick", action="store_true", help="Quick setup mode")
+
+    # ---- Web UI ----
+    web_parser = subparsers.add_parser("web", help="Start Web UI server")
+    web_parser.add_argument("--port", type=int, default=8080, help="Port to run on (default: 8080)")
+    web_parser.add_argument("--no-browser", action="store_true", help="Don't auto-open browser")
 
     args = parser.parse_args()
 
@@ -1179,6 +2035,12 @@ def main():
         return cmd_stop(args)
     if args.command == "logs":
         return cmd_logs(args)
+
+    if args.command == "autostart":
+        return cmd_autostart(args)
+
+    if args.command == "team":
+        return cmd_team(args)
 
     if args.command == "session":
         sub = args.subcommand
@@ -1216,11 +2078,26 @@ def main():
             return cmd_config_wizard(args)
         return cmd_config(args)
 
+    if args.command == "memory":
+        return cmd_memory(args)
+
     if args.command == "plugin":
         return cmd_plugin(args)
 
+    if args.command == "skill":
+        return cmd_skill(args)
+
+    if args.command == "template":
+        return cmd_template(args)
+
+    if args.command == "model":
+        return cmd_model(args)
+
     if args.command == "init":
         return cmd_init(args)
+
+    if args.command == "web":
+        return cmd_web(args)
 
     parser.print_help()
     return 1

@@ -4,6 +4,12 @@ h_agent/daemon/server.py - Backend daemon service.
 
 Uses TCP socket for IPC (more compatible than Unix sockets).
 Cross-platform: works on Linux/macOS/Windows.
+
+Features:
+- Session auto-recovery on startup
+- Daemon status reporting
+- Crash handler integration
+- Session management with tags/groups
 """
 
 import asyncio
@@ -16,6 +22,7 @@ from typing import Dict, Any
 
 from h_agent.platform_utils import daemon_pid_file, IS_WINDOWS
 from h_agent.session.manager import SessionManager
+from h_agent.daemon.recovery import SessionRecovery, CrashHandler, AutoStartManager, AutoStartConfig
 
 # Configuration
 DAEMON_PORT = int(os.environ.get("H_AGENT_PORT", 19527))
@@ -216,6 +223,15 @@ def run_daemon(port: int = DAEMON_PORT):
     """Run the daemon (blocking)."""
     daemon = DaemonServer(port)
 
+    # Integrate session recovery
+    recovery = SessionRecovery()
+    recovery_report = recovery.recover(daemon.session_manager)
+    if recovery_report.get("recovered"):
+        print(f"[Recovery] Restored session {recovery_report['session_id']} "
+              f"({recovery_report['message_count']} messages)")
+    if recovery_report.get("crashed"):
+        print(f"[Recovery] Previous session crashed, recovered gracefully")
+
     def signal_handler(sig, frame):
         daemon.stop()
         sys.exit(0)
@@ -232,7 +248,19 @@ def run_daemon(port: int = DAEMON_PORT):
         except (AttributeError, ValueError):
             pass
 
-    asyncio.run(daemon.start())
+    try:
+        asyncio.run(daemon.start())
+    except Exception as e:
+        # Record crash and re-raise
+        import traceback
+        tb = traceback.format_exc()
+        CrashHandler.record_crash(
+            exception_type=type(e).__name__,
+            exception_message=str(e),
+            traceback=tb,
+            session_id=daemon.session_manager.get_current(),
+        )
+        raise
 
 
 if __name__ == "__main__":

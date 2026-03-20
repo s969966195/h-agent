@@ -243,12 +243,17 @@ class ContextGuard:
         return system_msgs + recent_msgs
     
     def _generate_summary(self, messages: List[dict]) -> Optional[str]:
-        """生成消息摘要。"""
-        # 简单摘要：提取用户消息
-        user_msgs = [m.get("content", "") for m in messages if m.get("role") == "user"]
-        if user_msgs:
-            return "User asked: " + "; ".join(user_msgs[-3:])  # 最近3个用户消息
-        return None
+        """Generate LLM-powered summary of messages (replaces naive user-message extraction)."""
+        try:
+            from h_agent.memory.summarizer import SmartSummarizer
+            summarizer = SmartSummarizer()
+            return summarizer.summarize(messages)
+        except Exception:
+            # Fallback: extract user messages only
+            user_msgs = [m.get("content", "") for m in messages if m.get("role") == "user"]
+            if user_msgs:
+                return "User asked: " + "; ".join(user_msgs[-3:])
+            return None
     
     def guard_api_call(self, messages: List[dict]) -> tuple:
         """

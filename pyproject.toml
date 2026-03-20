@@ -4,14 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "h-agent"
-version = "0.2.0"
+version = "0.2.1"
 description = "OpenAI-powered coding agent harness with modular architecture"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
-authors = [
-    {name = "h-agent team"}
-]
+authors = [{name = "h-agent team"}]
 keywords = ["agent", "openai", "ai", "coding", "automation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -23,12 +21,26 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 
+# ─────────────────────────────────────────────
+# Minimal core — 内网/离线部署只需这 3 个
+# ─────────────────────────────────────────────
 dependencies = [
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
+    "flask>=3.0.0",
 ]
 
 [project.optional-dependencies]
+
+# 完整功能（在线环境）
+full = [
+    "chromadb>=0.4.0",
+    "pyyaml>=6.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+# 开发
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
@@ -37,8 +49,30 @@ dev = [
     "black>=23.0.0",
     "isort>=5.12.0",
 ]
+
+# RAG 支持
 rag = [
     "chromadb>=0.4.0",
+]
+
+# 独立打包（PyInstaller）
+standalone = [
+    "pyinstaller>=6.0",
+    "pyinstaller-hooks-contrib>=2024.0",
+]
+
+# 所有可选依赖
+all = [
+    "chromadb>=0.4.0",
+    "pyyaml>=6.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "pyinstaller>=6.0",
+    "pyinstaller-hooks-contrib>=2024.0",
 ]
 
 [project.scripts]
@@ -48,6 +82,9 @@ h-agent = "h_agent.cli.commands:main"
 Homepage = "https://github.com/user/h-agent"
 Repository = "https://github.com/user/h-agent"
 
+# ─────────────────────────────────────────────
+# 打包配置
+# ─────────────────────────────────────────────
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["h_agent*"]
@@ -60,3 +97,14 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+
+# ─────────────────────────────────────────────
+# Black / isort
+# ─────────────────────────────────────────────
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
