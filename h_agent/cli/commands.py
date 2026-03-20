@@ -2141,6 +2141,48 @@ def main():
     web_parser.add_argument("--port", type=int, default=8080, help="Port to run on (default: 8080)")
     web_parser.add_argument("--no-browser", action="store_true", help="Don't auto-open browser")
 
+    # ---- Cron ----
+    cron_parser = subparsers.add_parser("cron", help="Cron job scheduling")
+    cron_subparsers = cron_parser.add_subparsers(dest="cron_action")
+
+    cron_list_parser = cron_subparsers.add_parser("list", help="List all cron jobs")
+    cron_list_parser.add_argument("--verbose", "-v", action="store_true", help="Show details")
+
+    cron_add_parser = cron_subparsers.add_parser("add", help="Add a cron job")
+    cron_add_parser.add_argument("expression", help="Cron expression (e.g., '*/5 * * * *')")
+    cron_add_parser.add_argument("cmd", help="Command to execute")
+    cron_add_parser.add_argument("--name", "-n", dest="job_name", help="Job name")
+
+    cron_remove_parser = cron_subparsers.add_parser("remove", help="Remove a cron job")
+    cron_remove_parser.add_argument("job_id", help="Job ID to remove")
+
+    cron_enable_parser = cron_subparsers.add_parser("enable", help="Enable a cron job")
+    cron_enable_parser.add_argument("job_id", help="Job ID to enable")
+
+    cron_disable_parser = cron_subparsers.add_parser("disable", help="Disable a cron job")
+    cron_disable_parser.add_argument("job_id", help="Job ID to disable")
+
+    cron_exec_parser = cron_subparsers.add_parser("exec", help="Execute a cron job now")
+    cron_exec_parser.add_argument("job_id", help="Job ID to execute")
+
+    cron_log_parser = cron_subparsers.add_parser("log", help="Show execution logs")
+    cron_log_parser.add_argument("--job", dest="job_id", help="Filter by job ID")
+    cron_log_parser.add_argument("--limit", type=int, default=20, help="Number of records")
+
+    # ---- Heartbeat ----
+    heartbeat_parser = subparsers.add_parser("heartbeat", help="Heartbeat management")
+    heartbeat_subparsers = heartbeat_parser.add_subparsers(dest="heartbeat_action")
+
+    heartbeat_start_parser = heartbeat_subparsers.add_parser("start", help="Start heartbeat")
+    heartbeat_start_parser.add_argument("--interval", type=int, default=60,
+        help="Check interval in seconds (default: 60)")
+
+    heartbeat_stop_parser = heartbeat_subparsers.add_parser("stop", help="Stop heartbeat")
+
+    heartbeat_status_parser = heartbeat_subparsers.add_parser("status", help="Show heartbeat status")
+
+    heartbeat_run_parser = heartbeat_subparsers.add_parser("run", help="Run heartbeat check once")
+
     args = parser.parse_args()
 
     # ---- Version ----
@@ -2224,7 +2266,235 @@ def main():
     if args.command == "web":
         return cmd_web(args)
 
+    # ---- Cron ----
+    if args.command == "cron":
+        return cmd_cron(args)
+
+    # ---- Heartbeat ----
+    if args.command == "heartbeat":
+        return cmd_heartbeat(args)
+
     parser.print_help()
+    return 1
+
+
+# ============================================================
+# Cron Commands
+# ============================================================
+
+def cmd_cron(args) -> int:
+    """Handle cron commands."""
+    from datetime import datetime
+    from h_agent.scheduler import (
+        list_cron_jobs, get_cron_job, delete_cron_job,
+        enable_cron_job, disable_cron_job, add_cron_job,
+        list_executions, HeartbeatMonitor,
+        validate_cron, format_next_run, CronExpression,
+    )
+
+    sub = args.cron_action
+
+    if sub == "list":
+        jobs = list_cron_jobs()
+        if not jobs:
+            print("No cron jobs configured.")
+            return 0
+
+        if args.verbose:
+            print(f"{'ID':<10} {'Name':<20} {'Expression':<20} {'Status':<10} {'Next Run':<20}")
+            print("-" * 80)
+            for job in jobs:
+                next_run = format_next_run(
+                    datetime.fromtimestamp(job.next_run) if job.next_run else None
+                )
+                status = "✓ active" if job.enabled else "✗ disabled"
+                print(f"{job.id:<10} {job.name[:20]:<20} {job.expression:<20} {status:<12} {next_run:<20}")
+        else:
+            print(f"{'ID':<10} {'Name':<20} {'Expression':<15} {'Status':<10}")
+            print("-" * 60)
+            for job in jobs:
+                status = "active" if job.enabled else "disabled"
+                print(f"{job.id:<10} {job.name[:20]:<20} {job.expression:<15} {status:<10}")
+        return 0
+
+    if sub == "add":
+        expression = args.expression
+        command = args.cmd
+        name = args.job_name or f"Job {expression}"
+
+        # Validate expression
+        is_valid, error = validate_cron(expression)
+        if not is_valid:
+            _err(f"Invalid cron expression: {error}")
+            return 1
+
+        try:
+            job = add_cron_job(expression, command, name)
+            _ok(f"Added cron job '{name}' (ID: {job.id})")
+            print(f"  Expression: {expression}")
+            print(f"  Command: {command}")
+            print(f"  Next run: {format_next_run(datetime.fromtimestamp(job.next_run) if job.next_run else None)}")
+            return 0
+        except Exception as e:
+            _err(f"Failed to add cron job: {e}")
+            return 1
+
+    if sub == "remove":
+        job_id = args.job_id
+        job = get_cron_job(job_id)
+        if not job:
+            _err(f"Cron job not found: {job_id}")
+            return 1
+
+        deleted = delete_cron_job(job_id)
+        if deleted:
+            _ok(f"Removed cron job: {job.name} ({job_id})")
+            return 0
+        else:
+            _err(f"Failed to remove cron job: {job_id}")
+            return 1
+
+    if sub == "enable":
+        job_id = args.job_id
+        job = get_cron_job(job_id)
+        if not job:
+            _err(f"Cron job not found: {job_id}")
+            return 1
+
+        if enable_cron_job(job_id):
+            _ok(f"Enabled cron job: {job.name} ({job_id})")
+            return 0
+        else:
+            _err(f"Failed to enable cron job: {job_id}")
+            return 1
+
+    if sub == "disable":
+        job_id = args.job_id
+        job = get_cron_job(job_id)
+        if not job:
+            _err(f"Cron job not found: {job_id}")
+            return 1
+
+        if disable_cron_job(job_id):
+            _ok(f"Disabled cron job: {job.name} ({job_id})")
+            return 0
+        else:
+            _err(f"Failed to disable cron job: {job_id}")
+            return 1
+
+    if sub == "exec":
+        job_id = args.job_id
+        job = get_cron_job(job_id)
+        if not job:
+            _err(f"Cron job not found: {job_id}")
+            return 1
+
+        print(f"Executing job: {job.name}...")
+        monitor = HeartbeatMonitor()
+        results = monitor.run_once()
+        
+        for r in results:
+            if r["job_id"] == job_id:
+                if r["success"]:
+                    _ok(f"Job executed successfully")
+                    if r["output"]:
+                        print(f"Output: {r['output']}")
+                else:
+                    _err(f"Job failed: {r['error']}")
+                return 0
+
+        print("Job was not executed (not due to run)")
+        return 0
+
+    if sub == "log":
+        job_id = args.job_id
+        limit = args.limit
+
+        records = list_executions(task_id=job_id, limit=limit)
+        if not records:
+            print("No execution records found.")
+            return 0
+
+        print(f"{'ID':<10} {'Job ID':<10} {'Started':<25} {'Status':<8} {'Exit':<5}")
+        print("-" * 65)
+        for rec in records:
+            started = datetime.fromtimestamp(rec.started_at).strftime("%Y-%m-%d %H:%M:%S")
+            status = "✓" if rec.success else "✗"
+            exit_code = str(rec.exit_code) if rec.exit_code else "-"
+            print(f"{rec.id:<10} {rec.task_id:<10} {started:<25} {status:<8} {exit_code:<5}")
+        return 0
+
+    cron_parser.print_help()
+    return 1
+
+
+# ============================================================
+# Heartbeat Commands
+# ============================================================
+
+def cmd_heartbeat(args) -> int:
+    """Handle heartbeat commands."""
+    from h_agent.scheduler import (
+        heartbeat_status, start_heartbeat, stop_heartbeat,
+        is_heartbeat_running, HeartbeatMonitor,
+    )
+
+    sub = args.heartbeat_action
+
+    if sub == "start":
+        if is_heartbeat_running():
+            _warn("Heartbeat is already running")
+            return 0
+
+        interval = args.interval
+        if start_heartbeat(interval=interval):
+            _ok(f"Heartbeat started (interval: {interval}s)")
+            return 0
+        else:
+            _err("Failed to start heartbeat")
+            return 1
+
+    if sub == "stop":
+        if not is_heartbeat_running():
+            _warn("Heartbeat is not running")
+            return 0
+
+        if stop_heartbeat():
+            _ok("Heartbeat stopped")
+            return 0
+        else:
+            _err("Failed to stop heartbeat")
+            return 1
+
+    if sub == "status":
+        status = heartbeat_status()
+        running = status.get("running", False)
+
+        print(f"Heartbeat: {'running' if running else 'stopped'}")
+        if running:
+            print(f"  PID: {status.get('pid', 'N/A')}")
+            print(f"  Interval: {status.get('interval', 60)}s")
+            if status.get("last_check"):
+                from datetime import datetime
+                last = datetime.fromtimestamp(status["last_check"]).strftime("%Y-%m-%d %H:%M:%S")
+                print(f"  Last check: {last}")
+            print(f"  Total executions: {status.get('executions', 0)}")
+        return 0
+
+    if sub == "run":
+        print("Running heartbeat check...")
+        monitor = HeartbeatMonitor()
+        results = monitor.run_once()
+        if results:
+            print(f"Executed {len(results)} task(s):")
+            for r in results:
+                status = "✓" if r["success"] else "✗"
+                print(f"  {status} {r['job_name']}")
+        else:
+            print("No tasks due to run.")
+        return 0
+
+    heartbeat_parser.print_help()
     return 1
 
 
