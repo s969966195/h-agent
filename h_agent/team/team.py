@@ -893,13 +893,13 @@ class AgentTeam:
                                 from h_agent.team.agent import AgentLoader, create_full_handler
                                 profile = AgentLoader.load_profile(name)
                                 if profile:
-                                    handler = create_full_handler(name, profile)
+                                    handler = create_full_handler(name, profile, team_instance=self)
                                 else:
                                     from h_agent.team.agent import init_agent_profile
                                     profile = init_agent_profile(name, role=role.value, description=m_data.get("description", ""))
                                     if profile.soul_path.exists():
                                         profile.soul_path.write_text(system_prompt)
-                                    handler = create_full_handler(name, profile)
+                                    handler = create_full_handler(name, profile, team_instance=self)
                                 member.set_handler(handler)
                             except Exception:
                                 pass

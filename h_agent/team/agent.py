@@ -281,10 +281,12 @@ class FullAgentHandler:
         extra_tools: List[dict] = None,
         extra_handlers: Dict[str, callable] = None,
         workspace_dir: str = None,
+        team_instance=None,
     ):
         self.agent_name = agent_name
         self.profile = profile or AgentLoader.get_profile(agent_name)
         self.session_mgr = AgentSessionManager(agent_name)
+        self.team = team_instance
         
         self.tools = list(CORE_TOOLS)
         if extra_tools:
@@ -294,8 +296,38 @@ class FullAgentHandler:
         if extra_handlers:
             self.tool_handlers.update(extra_handlers)
         
+        if self.team:
+            self._setup_team_tools()
+        
         self.workspace_dir = Path(workspace_dir) if workspace_dir else None
         self.client = get_client()
+    
+    def _setup_team_tools(self):
+        """Setup team communication tools if team instance is available."""
+        talk_to_tool = {
+            "type": "function",
+            "function": {
+                "name": "talk_to",
+                "description": "向团队成员发送消息并获取回复。用于与团队成员对话交流。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {"type": "string", "description": "目标agent名称"},
+                        "message": {"type": "string", "description": "要发送的消息内容"},
+                    },
+                    "required": ["agent_name", "message"]
+                }
+            }
+        }
+        self.tools.append(talk_to_tool)
+        
+        def talk_to_handler(agent_name: str, message: str) -> str:
+            result = self.team.talk_to(agent_name, message, timeout=120)
+            if result.success:
+                return result.content or "(无回复)"
+            return f"Error: {result.error}"
+        
+        self.tool_handlers["talk_to"] = talk_to_handler
     
     def build_messages(self, task_content: str) -> List[dict]:
         """构建发送给 LLM 的消息列表。"""
@@ -533,6 +565,7 @@ def create_full_handler(
     profile: AgentProfile = None,
     extra_tools: List[dict] = None,
     extra_handlers: Dict[str, callable] = None,
+    team_instance=None,
 ) -> callable:
     """工厂函数：创建完整的 Agent Handler。"""
     
@@ -542,6 +575,9 @@ def create_full_handler(
         extra_tools=extra_tools,
         extra_handlers=extra_handlers,
     )
+    
+    if team_instance:
+        handler.team = team_instance
     
     def handle_message(msg) -> dict:
         from h_agent.team.team import TaskResult, AgentRole
