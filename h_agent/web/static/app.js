@@ -322,8 +322,9 @@ class HAgentUI {
             }
         }
         
-        if (data.done) {
-            // Done
+        if (data.done && data.session_id && !this.currentSessionId) {
+            this.currentSessionId = data.session_id;
+            this.loadSessions();
         }
     }
     

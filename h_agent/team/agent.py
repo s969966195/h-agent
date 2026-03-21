@@ -309,23 +309,15 @@ class FullAgentHandler:
         
         system_prompt = AgentLoader.build_system_prompt(self.profile, extra_context)
         
-        history_summary = ""
-        if context:
-            history_lines = []
-            for msg in context:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user":
-                    history_lines.append(f"用户: {content[:200]}")
-                elif role == "assistant":
-                    history_lines.append(f"助手: {content[:200]}")
-            if history_lines:
-                history_summary = "\n\n=== 对话历史 ===\n" + "\n".join(history_lines)
-        
-        if history_summary:
-            system_prompt += history_summary
-        
         result_messages = [{"role": "system", "content": system_prompt}]
+        
+        if context:
+            for msg in context:
+                result_messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", "")
+                })
+        
         result_messages.append({"role": "user", "content": str(task_content)})
         
         return result_messages

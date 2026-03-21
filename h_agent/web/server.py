@@ -312,7 +312,7 @@ def api_chat():
                     break
                 
                 elif event_type == "end":
-                    yield f"event: end\ndata: {json.dumps({'done': True})}\n\n"
+                    yield f"event: end\ndata: {json.dumps({'done': True, 'session_id': session_id})}\n\n"
                     break
                     
             except queue.Empty:
