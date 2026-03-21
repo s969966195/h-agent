@@ -1,27 +1,48 @@
-# Agent Team 配置指南（用户版）
+# Agent Team 配置指南
 
-本文档介绍如何通过命令行配置和使用多Agent团队。
+本文档介绍如何配置和使用多Agent团队。
 
 ---
 
-## 一、查看当前团队状态
+## 一、快速开始
+
+### 1.1 初始化团队
+
+如果 Web UI 显示 "Agent has no active handler"，需要重新初始化：
+
+```bash
+h-agent team init
+```
+
+### 1.2 查看团队状态
 
 ```bash
 # 查看所有已注册的Agent
 h-agent team list
 
-# 查看团队状态
+# 查看团队状态（显示成员数、待处理任务数、历史记录数）
 h-agent team status
 
 # 查看Daemon状态
 h-agent status
 ```
 
+**Pending tasks** 说明：
+- Pending tasks 是指已提交但尚未完成的任务
+- 查看待处理任务详情：
+```bash
+# 方式一：查看任务队列
+h-agent team tasks
+
+# 方式二：直接查看日志
+h-agent logs | grep "pending"
+```
+
 ---
 
 ## 二、启动界面
 
-### 2.1 Web UI（推荐）
+### 2.1 Web UI
 
 ```bash
 # 启动Web界面
@@ -36,48 +57,53 @@ h-agent web --port 8080
 ### 2.2 交互式CLI
 
 ```bash
-# 进入交互模式
 h-agent chat
-
-# 指定会话
-h-agent chat --session my-project
 ```
 
 ### 2.3 单次命令
 
 ```bash
-# 向组长Agent发送任务
 h-agent team talk 组长 "帮我开发一个登录功能"
 ```
 
 ---
 
-## 三、配置文件
+## 三、团队配置
 
-所有Agent配置存储在：
+### 3.1 配置文件位置
 
 ```
 ~/.h-agent/team/team_state.json
 ```
 
-### 3.1 查看当前配置
+### 3.2 查看和编辑配置
 
 ```bash
+# 查看当前配置
 cat ~/.h-agent/team/team_state.json
+
+# 编辑配置文件（手动编辑 JSON）
+nano ~/.h-agent/team/team_state.json
 ```
 
-### 3.2 修改Agent的System Prompt
+### 3.3 清理重复的 Agent
 
-找到要修改的Agent，编辑 `system_prompt` 字段：
+如果 `team_state.json` 中有重复的 role（如多个 planner），手动编辑文件删除重复项：
 
 ```json
 {
-  "name": "组长",
-  "role": "coordinator",
-  "description": "组长Agent",
-  "system_prompt": "在这里写你定制的prompt内容...",
-  "enabled": true
+  "members": [
+    {"name": "planner", "role": "planner", ...},  // 只保留一个
+    {"name": "架构", "role": "planner", ...},      // 删除这个
+    ...
+  ]
 }
+```
+
+编辑后重新初始化：
+```bash
+h-agent team init
+```
 ```
 
 ### 3.3 添加新Agent
@@ -225,10 +251,31 @@ h-agent chat
 
 ```bash
 h-agent cron list
-h-agent heartbeat list
 ```
 
-### 7.2 添加早晨简报任务
+输出示例：
+```
+ID         Name     Expression      Status    
+------------------------------------------------------------
+29fcd91f   Job      */1 * * * *     active    
+```
+
+- **ID**: 任务的唯一标识符
+- **Name**: 任务名称
+- **Expression**: Cron 表达式（`* * * * *` = 分 时 日 月 周）
+- **Status**: 任务状态（active=运行中）
+
+### 7.2 查看定时任务详情
+
+```bash
+# 查看任务执行日志
+h-agent cron log <job_id>
+
+# 手动执行一个任务
+h-agent cron exec <job_id>
+```
+
+### 7.3 添加定时任务
 
 ```bash
 # 每天早上9点执行
@@ -294,13 +341,23 @@ def my_tool(arg1: str) -> str:
 
 ---
 
-## 九、完整Agent配置（新版）
+## 九、Agent 配置（推荐方式）
 
-> **提示**：新版 Agent Profile 系统支持完整的会话历史、工具调用和流式输出。
+推荐使用 Agent Profile 方式配置 Agent，获得完整的会话历史、工具调用和流式输出能力。
 
-### 9.1 Agent Profile 系统
+### 9.1 目录结构
 
-每个 Agent 现在可以有独立的能力配置：
+每个 Agent 配置文件位于：
+
+```
+~/.h-agent/agents/{agent_name}/
+├── IDENTITY.md    # 身份定义：名字、角色、性格
+├── SOUL.md        # 行为准则：工作原则、协作方式
+├── USER.md        # 用户信息：偏好、项目上下文
+└── config.json    # Agent 配置
+```
+
+### 9.2 创建 Agent Profile
 
 ```
 ~/.h-agent/agents/{agent_name}/
@@ -508,9 +565,12 @@ curl http://localhost:8080/api/agents
 
 ---
 
-## 十一、完整团队配置模板
+## 十一、团队配置模板（legacy）
 
-以下是一个完整的 6 人团队配置，复制到 `~/.h-agent/team/team_state.json` 即可使用。
+> **注意**：以下是基于 `team_state.json` 的旧版配置方式。
+> **推荐**：使用第九节的 Agent Profile 方式配置 Agent。
+
+以下是一个完整的 6 人团队配置，复制到 `~/.h-agent/team/team_state.json` 即可使用：
 
 ```json
 {
@@ -589,20 +649,33 @@ h-agent team list
 
 ## 十二、常见问题
 
+### Q: Web UI 显示 "Agent has no active handler"？
+A: 执行 `h-agent team init` 重新初始化团队
+
 ### Q: 如何删除Agent？
-A: 在 `team_state.json` 中删除对应的成员条目，或设置 `"enabled": false`
+A: 
+- **Profile 方式**：删除 `~/.h-agent/agents/{agent_name}/` 目录
+- **team_state 方式**：在 `team_state.json` 中删除对应成员
 
 ### Q: 如何暂停某个Agent？
 A: 设置 `"enabled": false`
 
 ### Q: 修改配置后不生效？
-A: 执行 `h-agent restart` 重启Daemon
+A: 
+- Profile 方式：直接生效，无需重启
+- team_state 方式：执行 `h-agent team init` 重新初始化
 
 ### Q: 忘记Agent名字怎么办？
 A: 执行 `h-agent team list` 查看所有Agent
 
 ### Q: 如何让Agent之间自动协作？
-A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己调用 `h-agent team talk` 协作
+A: 在各Agent的prompt中说明工作流程，Agent会根据prompt自己调用 `h-agent team talk` 协作
+
+### Q: Pending tasks 是什么意思？
+A: 已提交但尚未完成的任务。使用 `h-agent logs | grep pending` 查看详情
+
+### Q: team_state.json 有重复的 role 怎么办？
+A: 手动编辑 `~/.h-agent/team/team_state.json`，删除重复条目，然后执行 `h-agent team init`
 
 ---
 
@@ -610,6 +683,7 @@ A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己
 
 | 命令 | 说明 |
 |------|------|
+| `h-agent team init` | 初始化团队（修复 handler 错误） |
 | `h-agent team list` | 列出所有Agent |
 | `h-agent team status` | 查看团队状态 |
 | `h-agent team talk <agent> <msg>` | 向Agent发送消息 |
@@ -617,6 +691,7 @@ A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己
 | `h-agent agent init <name>` | 创建新Agent Profile |
 | `h-agent agent show <name>` | 查看Agent详情 |
 | `h-agent agent edit <name> <file>` | 编辑Agent文件 |
+| `h-agent agent sessions <name>` | 查看Agent会话 |
 | `h-agent web` | 启动Web UI |
 | `h-agent chat` | 交互式CLI |
 | `h-agent start` | 启动Daemon |
@@ -625,4 +700,5 @@ A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己
 | `h-agent logs` | 查看日志 |
 | `h-agent skill list` | 列出Skill |
 | `h-agent cron list` | 列出定时任务 |
+| `h-agent cron log <job_id>` | 查看任务日志 |
 | HTTP API | `POST /api/agents/{agent_id}/message` |
