@@ -11,6 +11,7 @@ OpenAI-powered coding agent harness with modular architecture.
 - [第三章：多 Agent 协作](USER_GUIDE.md#第三章多-agent-协作) - 团队模式、任务分配、状态监控
   - [Agent Team 最佳实践（开发版）](docs/guides/agent-team-best-practices.md) - 从零配置多Agent团队
   - [Agent Team 配置指南（用户版）](docs/guides/agent-team-user-guide.md) - 通过命令行配置团队
+  - [Agent Profile 系统](docs/guides/agent-team-user-guide.md#九完整agent配置新版) - IDENTITY/SOUL/USER.md 配置
 - [第四章：技能系统（Skill）](USER_GUIDE.md#第四章技能系统skill) - 内置技能、安装新技能、创建自定义技能
 - [第五章：MCP 工具](USER_GUIDE.md#第五章mcp-工具) - Web 自动化、Token 免登录、自定义 MCP 配置
 - [第六章：高级配置](USER_GUIDE.md#第六章高级配置) - 多模型切换、Agent 模板、离线部署、性能调优

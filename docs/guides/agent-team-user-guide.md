@@ -294,7 +294,108 @@ def my_tool(arg1: str) -> str:
 
 ---
 
-## 九、完整团队配置模板
+## 九、完整Agent配置（新版）
+
+### 9.1 Agent Profile 系统
+
+每个 Agent 现在可以有独立的能力配置：
+
+```
+~/.h-agent/agents/{agent_name}/
+├── IDENTITY.md    # 身份定义：名字、角色、性格
+├── SOUL.md        # 行为准则：工作原则、协作方式
+├── USER.md        # 用户信息：偏好、项目上下文
+└── config.json    # Agent 配置
+```
+
+### 9.2 创建 Agent Profile
+
+```bash
+# 创建新的 Agent Profile
+h-agent agent init 我的Agent --role coordinator --description "我的智能助手"
+
+# 列出所有 Agent Profiles
+h-agent agent list
+
+# 查看 Agent 详细信息
+h-agent agent show 我的Agent
+
+# 查看 Agent 的会话
+h-agent agent sessions 我的Agent
+```
+
+### 9.3 编辑 Agent 文件
+
+```bash
+# 编辑 IDENTITY.md
+h-agent agent edit 我的Agent identity
+
+# 编辑 SOUL.md
+h-agent agent edit 我的Agent soul
+
+# 编辑 USER.md
+h-agent agent edit 我的Agent user
+
+# 编辑 config.json
+h-agent agent edit 我的Agent config
+```
+
+### 9.4 IDENTITY.md 示例
+
+```markdown
+# 我的Agent - IDENTITY
+
+## 名字
+我的Agent
+
+## 角色
+技术团队组长
+
+## 性格特点
+严谨、专业、注重效率
+
+## 专业领域
+- 项目管理
+- 技术架构设计
+- 代码审查
+```
+
+### 9.5 SOUL.md 示例
+
+```markdown
+# SOUL - 行为准则
+
+## 工作原则
+1. 优先确保代码质量和稳定性
+2. 追求简洁有效的解决方案
+3. 主动识别和解决问题
+
+## 协作方式
+1. 清晰传达任务目标和期望
+2. 及时反馈进度和问题
+3. 尊重团队成员的专业意见
+
+## 质量标准
+- 代码必须通过测试
+- 文档必须更新
+- 变更必须经过审查
+```
+
+### 9.6 Agent 能力
+
+使用 Profile 配置的 Agent 具备完整能力：
+
+| 能力 | 说明 |
+|------|------|
+| **Session** | 每个 Agent 有独立的会话历史 |
+| **ContextGuard** | 自动处理上下文溢出 |
+| **LongTermMemory** | 长期记忆存储和检索 |
+| **Tool Calling** | 完整工具调用能力 |
+| **Skills** | 可加载自定义技能 |
+
+---
+
+## 十、完整团队配置模板
 
 以下是一个完整的 6 人团队配置，复制到 `~/.h-agent/team/team_state.json` 即可使用。
 
@@ -373,7 +474,7 @@ h-agent team list
 
 ---
 
-## 十、常见问题
+## 十一、常见问题
 
 ### Q: 如何删除Agent？
 A: 在 `team_state.json` 中删除对应的成员条目，或设置 `"enabled": false`
@@ -392,13 +493,17 @@ A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己
 
 ---
 
-## 十、快捷命令汇总
+## 十二、快捷命令汇总
 
 | 命令 | 说明 |
 |------|------|
 | `h-agent team list` | 列出所有Agent |
 | `h-agent team status` | 查看团队状态 |
 | `h-agent team talk <agent> <msg>` | 向Agent发送消息 |
+| `h-agent agent list` | 列出所有Agent Profiles |
+| `h-agent agent init <name>` | 创建新Agent Profile |
+| `h-agent agent show <name>` | 查看Agent详情 |
+| `h-agent agent edit <name> <file>` | 编辑Agent文件 |
 | `h-agent web` | 启动Web UI |
 | `h-agent chat` | 交互式CLI |
 | `h-agent start` | 启动Daemon |

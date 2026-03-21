@@ -43,6 +43,10 @@ from h_agent.core.config import (
 )
 
 from h_agent.session.manager import SessionManager, get_manager
+from h_agent.team.agent import (
+    AgentLoader, FullAgentHandler, init_agent_profile,
+    create_full_handler, list_team_agents, AGENTS_DIR
+)
 from h_agent import __version__
 
 # ============================================================
@@ -416,8 +420,111 @@ def cmd_team(args) -> int:
     print("Usage:")
     print("  h-agent team list              List team members")
     print("  h-agent team status           Show team status")
-    print("  h-agent team init             Initialize team with default agents")
+    print("  h-agent team init            Initialize team with default agents")
     print("  h-agent team talk <agent> <msg>  Talk to a specific agent")
+    return 0
+
+
+def cmd_agent(args) -> int:
+    """Handle agent command — full-featured agent with IDENTITY/SOUL/USER.md."""
+    action = args.agent_action
+
+    if action == "list":
+        agents = list_team_agents()
+        if not agents:
+            print("No agent profiles configured.")
+            print()
+            print("Create one with:")
+            print("  h-agent agent init <name>")
+            return 0
+        print(f"Agent profiles ({len(agents)}):")
+        for a in agents:
+            status = "✅" if a["enabled"] else "❌"
+            print(f"  {status} {a['name']} [{a['role']}] — {a['description']}")
+        return 0
+
+    if action == "init":
+        name = args.name
+        role = getattr(args, "role", "coordinator")
+        description = getattr(args, "description", "")
+        profile = init_agent_profile(name, role, description)
+        print(f"Created agent profile: {name}")
+        print(f"  Config dir: {profile.dir_path}")
+        print()
+        print("Edit the profile files:")
+        print(f"  h-agent agent edit {name} identity  # Edit IDENTITY.md")
+        print(f"  h-agent agent edit {name} soul      # Edit SOUL.md")
+        print(f"  h-agent agent edit {name} user    # Edit USER.md")
+        return 0
+
+    if action == "show":
+        name = args.name
+        profile = AgentLoader.get_profile(name)
+        if not profile.exists():
+            print(f"Agent '{name}' does not exist.")
+            print(f"Create with: h-agent agent init {name}")
+            return 1
+        config = AgentLoader.load_config(profile)
+        print(f"Agent: {name}")
+        print(f"  Role: {config.get('role', 'unknown')}")
+        print(f"  Description: {config.get('description', '')}")
+        print(f"  Enabled: {config.get('enabled', True)}")
+        print(f"  Config dir: {profile.dir_path}")
+        print()
+        if profile.identity_path.exists():
+            print("=== IDENTITY.md ===")
+            print(profile.identity_path.read_text()[:500])
+            print("...")
+        if profile.soul_path.exists():
+            print()
+            print("=== SOUL.md ===")
+            print(profile.soul_path.read_text()[:500])
+            print("...")
+        return 0
+
+    if action == "edit":
+        name = args.name
+        file_type = args.file
+        profile = AgentLoader.get_profile(name)
+        if not profile.exists():
+            print(f"Agent '{name}' does not exist.")
+            return 1
+        path_map = {
+            "identity": profile.identity_path,
+            "soul": profile.soul_path,
+            "user": profile.user_path,
+            "config": profile.config_path,
+        }
+        path = path_map.get(file_type)
+        if not path.exists():
+            print(f"File {file_type} does not exist for agent '{name}'.")
+            return 1
+        import subprocess, sys
+        editor = os.environ.get("EDITOR", "nano" if sys.platform != "darwin" else "vim")
+        subprocess.call([editor, str(path)])
+        return 0
+
+    if action == "sessions":
+        name = args.name
+        from h_agent.team.agent import AgentSessionManager
+        mgr = AgentSessionManager(name)
+        sessions = mgr.session_store.get_recent_sessions(limit=10)
+        if not sessions:
+            print(f"No sessions for agent '{name}'.")
+            return 0
+        print(f"Sessions for agent '{name}':")
+        for s in sessions:
+            print(f"  {s['session_id']}: {s.get('message_count', 0)} msgs, updated {s.get('updated_at', '')[:19]}")
+        return 0
+
+    print("h-agent agent - Full-featured agent management")
+    print()
+    print("Usage:")
+    print("  h-agent agent list                 List all agent profiles")
+    print("  h-agent agent init <name>         Create new agent profile")
+    print("  h-agent agent show <name>         Show agent profile details")
+    print("  h-agent agent edit <name> <file>   Edit agent file (identity/soul/user/config)")
+    print("  h-agent agent sessions <name>      List agent sessions")
     return 0
 
 
@@ -1934,6 +2041,23 @@ def main():
     team_talk_parser.add_argument("message", help="Message to send")
     team_talk_parser.add_argument("--timeout", type=float, default=120, help="Timeout in seconds")
 
+    # ---- Agent ----
+    agent_parser = subparsers.add_parser("agent", help="Agent profile management")
+    agent_subparsers = agent_parser.add_subparsers(dest="agent_action")
+
+    agent_list_parser = agent_subparsers.add_parser("list", help="List all agent profiles")
+    agent_init_parser = agent_subparsers.add_parser("init", help="Initialize a new agent profile")
+    agent_init_parser.add_argument("name", help="Agent name")
+    agent_init_parser.add_argument("--role", default="coordinator", help="Agent role")
+    agent_init_parser.add_argument("--description", default="", help="Agent description")
+    agent_show_parser = agent_subparsers.add_parser("show", help="Show agent profile")
+    agent_show_parser.add_argument("name", help="Agent name")
+    agent_edit_parser = agent_subparsers.add_parser("edit", help="Edit agent profile file")
+    agent_edit_parser.add_argument("name", help="Agent name")
+    agent_edit_parser.add_argument("file", choices=["identity", "soul", "user", "config"], help="File to edit")
+    agent_sessions_parser = agent_subparsers.add_parser("sessions", help="List agent sessions")
+    agent_sessions_parser.add_argument("name", help="Agent name")
+
     # ---- Logs ----
     logs_parser = subparsers.add_parser("logs", help="View daemon log")
     logs_parser.add_argument("--tail", type=int, help="Show last N lines")
@@ -2205,6 +2329,9 @@ def main():
 
     if args.command == "team":
         return cmd_team(args)
+
+    if args.command == "agent":
+        return cmd_agent(args)
 
     if args.command == "session":
         sub = args.subcommand
