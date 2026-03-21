@@ -13,15 +13,9 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from openai import OpenAI
-from dotenv import load_dotenv
+from h_agent.core.client import get_client
 
-load_dotenv(override=True)
-
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-dummy"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+client = get_client()
 MODEL = os.getenv("MODEL_ID", "gpt-4o")
 
 # Memory store directory (shared with long_term)

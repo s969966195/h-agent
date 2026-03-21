@@ -21,10 +21,18 @@ import subprocess
 import threading
 import time
 from typing import Callable, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---- Performance config ----
 TOOL_TIMEOUT = int(os.environ.get("H_AGENT_TOOL_TIMEOUT", "120"))
 PROGRESS_CHUNK_SIZE = int(os.environ.get("H_AGENT_PROGRESS_CHUNK", str(1024 * 1024)))  # 1MB
+
+# ---- Tool classification ----
+READ_ONLY_TOOLS = {
+    "read", "glob", "git_status", "git_log", "git_branch",
+    "docker_ps", "docker_images", "shell_which", "shell_env",
+    "file_exists", "file_info", "file_glob",
+}
 
 
 def _stream_progress(cmd: str, process: subprocess.Popen, label: str = "") -> None:
@@ -85,14 +93,9 @@ def _run_command_with_timeout(cmd: str, timeout: int = TOOL_TIMEOUT, cwd: Option
 
 
 # ---- OpenAI client ----
-from openai import OpenAI
-from dotenv import load_dotenv
-load_dotenv(override=True)
+from h_agent.core.client import get_client
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-dummy"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+client = get_client()
 MODEL = os.getenv("MODEL_ID", "gpt-4o")
 
 SYSTEM = f"""You are a coding agent at {os.getcwd()}.
@@ -184,27 +187,43 @@ TOOLS = [
     }
 ]
 
-# Import extended tools from h_agent.tools package
-try:
-    from h_agent.tools import ALL_TOOLS as _EXTENDED_TOOLS
-    _existing_names = {t["function"]["name"] for t in TOOLS}
-    for tool in _EXTENDED_TOOLS:
-        if tool["function"]["name"] not in _existing_names:
-            TOOLS.append(tool)
-except ImportError:
-    pass  # Extended tools not available
+# ---- Lazy loading flags ----
+_EXTENDED_TOOLS_LOADED = False
+_PLUGINS_LOADED = False
 
-# Import plugin tools
-try:
-    from h_agent.plugins import load_all_plugins, get_enabled_tools, get_enabled_handlers
-    load_all_plugins()
-    _plugin_tools = get_enabled_tools()
-    _existing_names = {t["function"]["name"] for t in TOOLS}
-    for tool in _plugin_tools:
-        if tool["function"]["name"] not in _existing_names:
-            TOOLS.append(tool)
-except Exception as e:
-    pass  # Plugins not available
+
+def _ensure_extended_tools_loaded():
+    """Lazily load extended tools from h_agent.tools package."""
+    global _EXTENDED_TOOLS_LOADED
+    if _EXTENDED_TOOLS_LOADED:
+        return
+    _EXTENDED_TOOLS_LOADED = True
+    try:
+        from h_agent.tools import ALL_TOOLS as _EXTENDED_TOOLS
+        _existing_names = {t["function"]["name"] for t in TOOLS}
+        for tool in _EXTENDED_TOOLS:
+            if tool["function"]["name"] not in _existing_names:
+                TOOLS.append(tool)
+    except ImportError:
+        pass
+
+
+def _ensure_plugins_loaded():
+    """Lazily load plugin tools and handlers."""
+    global _PLUGINS_LOADED
+    if _PLUGINS_LOADED:
+        return
+    _PLUGINS_LOADED = True
+    try:
+        from h_agent.plugins import load_all_plugins, get_enabled_tools, get_enabled_handlers
+        load_all_plugins()
+        _plugin_tools = get_enabled_tools()
+        _existing_names = {t["function"]["name"] for t in TOOLS}
+        for tool in _plugin_tools:
+            if tool["function"]["name"] not in _existing_names:
+                TOOLS.append(tool)
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -338,28 +357,56 @@ TOOL_HANDLERS: Dict[str, Callable] = {
     "glob": tool_glob,
 }
 
-# Import extended tool handlers
-try:
-    from h_agent.tools import ALL_HANDLERS as _EXTENDED_HANDLERS
-    for name, handler in _EXTENDED_HANDLERS.items():
-        if name not in TOOL_HANDLERS:
-            TOOL_HANDLERS[name] = handler
-except ImportError:
-    pass
+# Extended handlers - lazy loaded
+_EXTENDED_HANDLERS_LOADED = False
 
-# Import plugin handlers
-try:
-    from h_agent.plugins import get_enabled_handlers
-    _plugin_handlers = get_enabled_handlers()
-    for name, handler in _plugin_handlers.items():
-        if name not in TOOL_HANDLERS:
-            TOOL_HANDLERS[name] = handler
-except Exception:
-    pass
+
+def _ensure_extended_handlers_loaded():
+    """Lazily load extended handlers from h_agent.tools package."""
+    global _EXTENDED_HANDLERS_LOADED
+    if _EXTENDED_HANDLERS_LOADED:
+        return
+    _EXTENDED_HANDLERS_LOADED = True
+    try:
+        from h_agent.tools import ALL_HANDLERS as _EXTENDED_HANDLERS
+        for name, handler in _EXTENDED_HANDLERS.items():
+            if name not in TOOL_HANDLERS:
+                TOOL_HANDLERS[name] = handler
+    except ImportError:
+        pass
+
+
+# Plugin handlers - lazy loaded
+_PLUGIN_HANDLERS_LOADED = False
+
+
+def _ensure_plugin_handlers_loaded():
+    """Lazily load plugin handlers."""
+    global _PLUGIN_HANDLERS_LOADED
+    if _PLUGIN_HANDLERS_LOADED:
+        return
+    _PLUGIN_HANDLERS_LOADED = True
+    try:
+        from h_agent.plugins import get_enabled_handlers
+        _plugin_handlers = get_enabled_handlers()
+        for name, handler in _plugin_handlers.items():
+            if name not in TOOL_HANDLERS:
+                TOOL_HANDLERS[name] = handler
+    except Exception:
+        pass
+
+
+def _ensure_all_loaded():
+    """Ensure all tools and handlers are loaded."""
+    _ensure_extended_tools_loaded()
+    _ensure_plugins_loaded()
+    _ensure_extended_handlers_loaded()
+    _ensure_plugin_handlers_loaded()
 
 
 def execute_tool_call(tool_call) -> str:
     """Execute a tool call using the dispatch map."""
+    _ensure_all_loaded()
     function_name = tool_call.function.name
     arguments = json.loads(tool_call.function.arguments)
 
@@ -370,47 +417,58 @@ def execute_tool_call(tool_call) -> str:
     return handler(**arguments)
 
 
+def _execute_single_tool(tool_call):
+    """Execute a single tool call, returns (tool_call_id, result)."""
+    _ensure_all_loaded()
+    function_name = tool_call.function.name
+    arguments = json.loads(tool_call.function.arguments)
+
+    handler = TOOL_HANDLERS.get(function_name)
+    if not handler:
+        result = f"Error: Unknown tool '{function_name}'"
+    else:
+        result = handler(**arguments)
+
+    return tool_call.id, result
+
+
+def execute_tool_calls_parallel(tool_calls: list) -> list:
+    """Execute multiple tool calls with parallelization for read-only tools."""
+    read_only = [tc for tc in tool_calls if tc.function.name in READ_ONLY_TOOLS]
+    write_ops = [tc for tc in tool_calls if tc.function.name not in READ_ONLY_TOOLS]
+
+    results = {}
+
+    if read_only:
+        with ThreadPoolExecutor(max_workers=len(read_only)) as executor:
+            futures = {executor.submit(_execute_single_tool, tc): tc for tc in read_only}
+            for future in as_completed(futures):
+                tool_call_id, result = future.result()
+                results[tool_call_id] = result
+
+    for tc in write_ops:
+        tool_call_id, result = _execute_single_tool(tc)
+        results[tool_call_id] = result
+
+    return [results[tc.id] for tc in tool_calls]
+
+
 # ============================================================
 # Agent Loop
 # ============================================================
 
 def agent_loop(messages: list):
     """The core agent loop with multi-tool support."""
-    while True:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            max_tokens=8000,
-        )
-
-        message = response.choices[0].message
-
-        messages.append({
-            "role": "assistant",
-            "content": message.content,
-            "tool_calls": message.tool_calls,
-        })
-
-        if not message.tool_calls:
-            return
-
-        for tool_call in message.tool_calls:
-            args = json.loads(tool_call.function.arguments)
-            if tool_call.function.name == "bash":
-                print(f"\033[33m$ {args.get('command', '')}\033[0m")
-            else:
-                print(f"\033[33m{tool_call.function.name}({list(args.keys())[0]}=...)\033[0m")
-
-            result = execute_tool_call(tool_call)
-            print(result[:200] + ("..." if len(result) > 200 else ""))
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result,
-            })
+    from h_agent.core.loop import run_agent_loop
+    run_agent_loop(
+        messages=messages,
+        client=client,
+        tools=TOOLS,
+        tool_handlers=TOOL_HANDLERS,
+        execute_tool_calls_parallel=execute_tool_calls_parallel,
+        max_tokens=8000,
+        print_results=True,
+    )
 
 
 def main():

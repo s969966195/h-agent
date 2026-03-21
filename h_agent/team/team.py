@@ -203,15 +203,15 @@ def _create_llm_handler_from_prompt(role_name: str, role_prompt: str):
     Create an LLM-based handler for a team agent from a stored prompt.
     Used to recreate handlers when loading team state.
     """
-    from openai import OpenAI
+    from h_agent.core.client import get_client
 
     def handler(msg):
         try:
             # Import here to avoid circular imports at module load time
-            from h_agent.core.config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
+            from h_agent.core.config import MODEL
             from h_agent.team.team import TaskResult, AgentRole
 
-            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            client = get_client()
             response = client.chat.completions.create(
                 model=MODEL,
                 messages=[

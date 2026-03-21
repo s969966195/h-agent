@@ -5,14 +5,61 @@ h_agent/session/manager.py - Session management utilities.
 Provides high-level session operations with tags and groups support.
 """
 
+import contextlib
+import fcntl
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Set
 
+IS_WINDOWS = sys.platform == "win32"
+_msvcrt: Any = None
+if IS_WINDOWS:
+    try:
+        import msvcrt
+        _msvcrt = msvcrt
+    except ImportError:
+        pass
+
 SESSION_DIR = Path.home() / ".h-agent" / "sessions"
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path, mode: str = "r"):
+    """Platform-safe file locking context manager.
+    
+    Args:
+        path: File to lock
+        mode: 'r' for shared lock, 'w' for exclusive lock
+    """
+    if IS_WINDOWS:
+        # Windows uses different locking mechanism
+        flags = mode == "r" and 0x1 or 0x2  # LOCK_SH or LOCK_EX
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+        _locking = getattr(_msvcrt, "locking", None)
+        try:
+            if _locking:
+                _locking(fd, flags, 0)
+            yield
+        finally:
+            if _locking:
+                _locking(fd, 0x8, 0)  # LOCK_UN
+            os.close(fd)
+    else:
+        # Unix uses fcntl
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            if mode == "r":
+                fcntl.flock(fd, fcntl.LOCK_SH)  # Shared lock
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX)  # Exclusive lock
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 class SessionManager:
@@ -169,13 +216,17 @@ class SessionManager:
             return []
 
         messages = []
-        with open(session_file) as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        messages.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
+        try:
+            with _file_lock(session_file, mode="r"):
+                with open(session_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                messages.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+        except Exception:
+            pass
         return messages
 
     def add_message(self, session_id: str, role: str, content: Any) -> bool:
@@ -190,8 +241,12 @@ class SessionManager:
             "timestamp": datetime.now().isoformat(),
         }
 
-        with open(session_file, "a") as f:
-            f.write(json.dumps(turn, ensure_ascii=False) + "\n")
+        try:
+            with _file_lock(session_file, mode="w"):
+                with open(session_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(turn, ensure_ascii=False) + "\n")
+        except Exception:
+            return False
 
         self.sessions[session_id]["message_count"] += 1
         self.sessions[session_id]["updated_at"] = datetime.now().isoformat()

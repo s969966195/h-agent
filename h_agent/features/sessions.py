@@ -18,16 +18,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, List, Dict, Optional
 from dataclasses import dataclass, field, asdict
+from h_agent.core.client import get_client
 
-from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
-
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-dummy"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+client = get_client()
 MODEL = os.getenv("MODEL_ID", "gpt-4o")
 
 WORKSPACE_DIR = Path.cwd() / ".agent_workspace"

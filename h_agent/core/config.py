@@ -17,7 +17,6 @@ import yaml
 import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List
-from dotenv import load_dotenv
 
 from h_agent.platform_utils import get_config_dir, IS_WINDOWS
 
@@ -164,11 +163,16 @@ def _load_current_config() -> dict:
     return _load_yaml_config(path)
 
 
-# Load .env first
-load_dotenv(override=True)
+# Lazy-loaded YAML config
+_yaml_config = None
 
-# Load current profile config
-_yaml_config = _load_current_config()
+
+def _get_yaml_config() -> dict:
+    """Get the current profile's YAML config (lazy loading)."""
+    global _yaml_config
+    if _yaml_config is None:
+        _yaml_config = _load_current_config()
+    return _yaml_config
 
 
 # ============================================================
@@ -198,12 +202,12 @@ OPENAI_API_KEY = _get_secret("OPENAI_API_KEY", "sk-dummy")
 
 OPENAI_BASE_URL = os.getenv(
     "OPENAI_BASE_URL",
-    _yaml_config.get("api_base_url", "https://api.openai.com/v1")
+    _get_yaml_config().get("api_base_url", "https://api.openai.com/v1")
 )
 
 MODEL_ID = os.getenv(
     "MODEL_ID",
-    _yaml_config.get("model_id", "gpt-4o")
+    _get_yaml_config().get("model_id", "gpt-4o")
 )
 
 MODEL = MODEL_ID
@@ -226,15 +230,15 @@ WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 CONTEXT_SAFE_LIMIT = int(os.getenv(
     "CONTEXT_SAFE_LIMIT",
-    _yaml_config.get("context_safe_limit", 180000)
+    _get_yaml_config().get("context_safe_limit", 180000)
 ))
 MAX_TOOL_OUTPUT = int(os.getenv(
     "MAX_TOOL_OUTPUT",
-    _yaml_config.get("max_tool_output", 50000)
+    _get_yaml_config().get("max_tool_output", 50000)
 ))
 TOOL_TIMEOUT = int(os.getenv(
     "H_AGENT_TOOL_TIMEOUT",
-    _yaml_config.get("tool_timeout", 120)
+    _get_yaml_config().get("tool_timeout", 120)
 ))
 
 
@@ -264,7 +268,7 @@ def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
     secrets = _load_secrets()
     if key.upper() in secrets or key.lower() in secrets:
         return secrets.get(key.upper()) or secrets.get(key.lower())
-    yaml_val = _yaml_config.get(key.lower())
+    yaml_val = _get_yaml_config().get(key.lower())
     if yaml_val:
         return str(yaml_val)
     return default
@@ -292,7 +296,7 @@ def set_config(key: str, value: str, secure: bool = False) -> None:
 
 def list_config() -> dict:
     """List all configuration values for current profile (secrets masked)."""
-    config = dict(_yaml_config)
+    config = dict(_get_yaml_config())
 
     # Add env overrides
     for key in ["OPENAI_BASE_URL", "MODEL_ID", "OPENAI_API_KEY"]:

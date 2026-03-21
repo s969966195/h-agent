@@ -2,7 +2,14 @@
 
 *"时间不在于你拥有多少，而在于你如何使用。"* — 艾克
 
-本文档介绍 h-agent 的三大核心模块：`agent_loop`（智能体循环）、`config`（配置管理）、`tools`（工具系统）。
+本文档介绍 h-agent 的核心架构模块：
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| `client` | `h_agent/core/client.py` | 单例 OpenAI 客户端，统一连接池 |
+| `config` | `h_agent/core/config.py` | 配置管理，多层优先级 |
+| `loop` | `h_agent/core/loop.py` | 共享智能体循环，支持并行工具执行 |
+| `tools` | `h_agent/core/tools.py` | 工具系统，懒加载扩展和插件 |
 
 ---
 
@@ -196,6 +203,12 @@ h-agent 的工具系统基于**分发映射（Dispatch Map）** 架构：
 
 添加新工具只需注册 handler，循环逻辑不变。
 
+### 懒加载
+
+工具系统采用懒加载策略：
+- 扩展工具和插件在首次使用时加载，非模块导入时
+- 避免不必要的启动延迟
+
 ### 内置核心工具
 
 | 工具名 | 说明 | 核心参数 |
@@ -264,16 +277,135 @@ from h_agent.tools import ALL_TOOLS, ALL_HANDLERS
 - 大文件（>10MB）读取会自动流式处理并显示进度条
 - 插件工具也会被自动加载到工具列表
 
+### 并行工具执行
+
+只读工具支持并行执行，提升多工具调用场景的性能：
+
+```python
+from h_agent.core.tools import execute_tool_calls_parallel, READ_ONLY_TOOLS
+
+# READ_ONLY_TOOLS 包含 12 个只读工具
+print(READ_ONLY_TOOLS)
+# {'read', 'glob', 'git_status', 'git_log', 'git_branch', 'docker_ps', 
+#  'docker_images', 'shell_which', 'shell_env', 'file_exists', 'file_info', 'file_glob'}
+
+# 并行执行多个只读工具调用
+results = execute_tool_calls_parallel(tool_calls)
+```
+
+**执行策略：**
+- 只读工具（read, glob, git_status 等）：使用 `ThreadPoolExecutor` 并行执行
+- 写操作（bash, write, edit, git_commit 等）：顺序执行，保证正确性
+
 ---
 
 ## 三者关系
 
 ```
+client.py          ← 单例 OpenAI 客户端（@lru_cache 懒加载）
+    ↓
 config.py          ← 配置加载（API Key、模型、超时等）
     ↓
-agent_loop.py      ← 核心循环（调用 LLM + 分发工具）
+loop.py            ← 共享智能体循环（所有 agent_loop 的单一来源）
     ↓
 tools.py           ← 工具执行（bash/read/write/edit/glob + 扩展 + 插件）
 ```
 
-`config` 提供运行时参数，`agent_loop` 驱动对话流程，`tools` 提供实际操作能力。三者协同工作，构成 h-agent 的核心骨架。
+`client.py` 提供统一的 OpenAI 连接池，`config` 提供运行时参数，`loop.py` 驱动对话流程，`tools` 提供实际操作能力。四者协同工作，构成 h-agent 的核心骨架。
+
+---
+
+## 4. client — 单例 OpenAI 客户端
+
+### 功能概述
+
+`client.py` 使用 `@lru_cache` 实现懒加载单例模式，所有模块共用一个 OpenAI 客户端实例，避免重复创建连接池。
+
+### 工作原理
+
+```python
+from h_agent.core.client import get_client
+
+# 首次调用时创建客户端
+client = get_client()
+
+# 后续调用返回相同实例
+client2 = get_client()
+assert client is client2  # True — 同一实例
+```
+
+### 优势
+
+| 传统方式 | 单例模式 |
+|----------|----------|
+| 每个模块创建独立客户端 | 所有模块共用一个客户端 |
+| 多个连接池 | 单一连接池，复用连接 |
+| 内存浪费 | 内存占用降低 ~50% |
+
+### 程序化使用
+
+```python
+from h_agent.core.client import get_client
+
+client = get_client()
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "你好"}]
+)
+```
+
+### 懒加载特性
+
+- 客户端在首次 `get_client()` 调用时创建，非模块导入时
+- `load_dotenv()` 在客户端创建时调用一次，非每个模块重复调用
+- 测试时可通过 `get_client.cache_clear()` 清除缓存
+
+---
+
+## 5. loop — 共享智能体循环
+
+### 功能概述
+
+`loop.py` 提取了通用的 `run_agent_loop()` 函数，消除代码重复，支持并行工具执行。
+
+### 工作原理
+
+```
+用户输入 → 消息历史 → LLM (带工具) → 
+  ├─ 无 tool_calls → 返回最终回答
+  └─ 有 tool_calls → 
+      ├─ 只读工具（read, glob 等）→ 并行执行
+      └─ 写操作（bash, write, edit）→ 顺序执行
+      → 结果作为 tool 消息 → 再次调用 LLM → ...
+```
+
+### 并行工具执行
+
+只读工具使用 `ThreadPoolExecutor` 并行执行：
+
+| 工具类型 | 示例 | 执行方式 |
+|----------|------|----------|
+| 只读工具 | `read`, `glob`, `git_status`, `docker_ps` | 并行（ThreadPoolExecutor） |
+| 写操作 | `bash`, `write`, `edit`, `git_commit` | 顺序（保正确性） |
+
+### 基本使用
+
+```python
+from h_agent.core.loop import run_agent_loop
+from h_agent.core.client import get_client
+
+messages = [{"role": "user", "content": "帮我查看项目结构"}]
+run_agent_loop(
+    messages=messages,
+    client=get_client(),
+    tools=TOOLS,
+    tool_handlers=TOOL_HANDLERS,
+)
+```
+
+### 弃用说明
+
+以下文件的 `agent_loop()` 函数已标记为 DEPRECATED，请使用 `h_agent.core.loop.run_agent_loop()`：
+- `h_agent/core/agent_loop.py`
+- `h_agent/features/skills.py`
+- `h_agent/features/subagents.py`

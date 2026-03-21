@@ -19,16 +19,9 @@ The pattern remains the same:
 import os
 import json
 import subprocess
-from openai import OpenAI
-from dotenv import load_dotenv
+from h_agent.core.client import get_client
 
-load_dotenv(override=True)
-
-# 支持 OpenAI 兼容的 API（如智谱、DeepSeek、本地模型等）
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-dummy"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+client = get_client()
 MODEL = os.getenv("MODEL_ID", "gpt-4o")
 
 SYSTEM = f"You are a coding agent at {os.getcwd()}. Use bash to solve tasks. Act, don't explain."
@@ -90,48 +83,16 @@ def execute_tool_call(tool_call) -> str:
 
 
 def agent_loop(messages: list):
-    """
-    The core agent loop.
-    
-    Keep calling the LLM and executing tools until the model stops.
-    """
-    while True:
-        # 调用 LLM
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            max_tokens=8000,
-        )
-        
-        message = response.choices[0].message
-        
-        # 将 assistant 回复加入历史
-        messages.append({
-            "role": "assistant",
-            "content": message.content,
-            "tool_calls": message.tool_calls,
-        })
-        
-        # 如果没有工具调用，结束循环
-        if not message.tool_calls:
-            return
-        
-        # 执行每个工具调用，收集结果
-        for tool_call in message.tool_calls:
-            print(f"\033[33m$ {json.loads(tool_call.function.arguments).get('command', '')}\033[0m")
-            
-            # 执行工具
-            result = execute_tool_call(tool_call)
-            print(result[:200] + ("..." if len(result) > 200 else ""))
-            
-            # 将工具结果加入消息历史（OpenAI 格式）
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result,
-            })
+    """DEPRECATED: Use h_agent.core.loop.run_agent_loop instead."""
+    from h_agent.core.loop import run_agent_loop
+    run_agent_loop(
+        messages=messages,
+        client=client,
+        tools=TOOLS,
+        tool_handlers={"bash": run_bash},
+        max_tokens=8000,
+        print_results=True,
+    )
 
 
 def main():

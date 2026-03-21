@@ -43,13 +43,10 @@ def _get_openai_client():
     global _openai_client, HAS_OPENAI
     if _openai_client is None:
         try:
-            from openai import OpenAI
-            api_key = os.environ.get("OPENAI_API_KEY", "")
-            base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-            if api_key:
-                _openai_client = OpenAI(api_key=api_key, base_url=base_url)
-                HAS_OPENAI = True
-        except ImportError:
+            from h_agent.core.client import get_client
+            _openai_client = get_client()
+            HAS_OPENAI = True
+        except Exception:
             HAS_OPENAI = False
     return _openai_client
 

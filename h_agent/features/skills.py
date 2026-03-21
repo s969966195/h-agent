@@ -13,17 +13,11 @@ import os
 import json
 import glob as glob_module
 import subprocess
-from openai import OpenAI
-from dotenv import load_dotenv
 from typing import Callable, Dict, Any, List, Optional
 from pathlib import Path
+from h_agent.core.client import get_client
 
-load_dotenv(override=True)
-
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-dummy"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+client = get_client()
 MODEL = os.getenv("MODEL_ID", "gpt-4o")
 
 WORK_DIR = os.getcwd()
@@ -243,32 +237,17 @@ Act efficiently."""
 
 
 def agent_loop(messages: list):
-    while True:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[{"role": "system", "content": get_system_prompt()}] + messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            max_tokens=8000,
-        )
-        
-        message = response.choices[0].message
-        messages.append({"role": "assistant", "content": message.content, "tool_calls": message.tool_calls})
-        
-        if not message.tool_calls:
-            return
-        
-        for tool_call in message.tool_calls:
-            args = json.loads(tool_call.function.arguments)
-            if tool_call.function.name in ["load_skill", "list_skills"]:
-                print(f"\033[32m📚 {tool_call.function.name}: {args}\033[0m")
-            else:
-                print(f"\033[33m$ {tool_call.function.name}\033[0m")
-            
-            result = execute_tool_call(tool_call)
-            print(result[:150] + ("..." if len(result) > 150 else ""))
-            
-            messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
+    """DEPRECATED: Use h_agent.core.loop.run_agent_loop instead."""
+    from h_agent.core.loop import run_agent_loop
+    run_agent_loop(
+        messages=messages,
+        client=client,
+        tools=TOOLS,
+        tool_handlers=TOOL_HANDLERS,
+        system_prompt=get_system_prompt(),
+        max_tokens=8000,
+        print_results=True,
+    )
 
 
 def main():

@@ -25,9 +25,6 @@ from typing import Optional
 # Add parent to path for imports when running directly
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from dotenv import load_dotenv
-load_dotenv(override=True)
-
 from h_agent.platform_utils import (
     IS_WINDOWS, daemon_pid_file, start_daemon_subprocess,
     stop_process, is_process_alive, get_config_dir
