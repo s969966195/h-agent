@@ -32,11 +32,46 @@ def get_team():
 
 # Lazy-load FullAgentHandler
 _full_agent_handlers = {}
+
+def get_team_talk_handler(team):
+    """Create a talk_to handler that closes over the team instance."""
+    def handle_talk_to(agent_name: str, message: str) -> str:
+        result = team.talk_to(agent_name, message, timeout=120)
+        if result.success:
+            return result.content or "(无回复)"
+        return f"Error: {result.error}"
+    return handle_talk_to
+
 def get_full_agent_handler(agent_id: str):
     if agent_id not in _full_agent_handlers:
         from h_agent.team.agent import FullAgentHandler, AgentLoader
         profile = AgentLoader.load_profile(agent_id)
-        _full_agent_handlers[agent_id] = FullAgentHandler(agent_id, profile)
+        team = get_team()
+        
+        talk_to_tool = {
+            "type": "function",
+            "function": {
+                "name": "talk_to",
+                "description": "向团队成员发送消息并获取回复。用于与团队成员对话交流。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {"type": "string", "description": "目标agent名称"},
+                        "message": {"type": "string", "description": "要发送的消息内容"},
+                    },
+                    "required": ["agent_name", "message"]
+                }
+            }
+        }
+        
+        talk_handler = get_team_talk_handler(team)
+        
+        _full_agent_handlers[agent_id] = FullAgentHandler(
+            agent_id, 
+            profile,
+            extra_tools=[talk_to_tool],
+            extra_handlers={"talk_to": talk_handler}
+        )
     return _full_agent_handlers[agent_id]
 
 app = Flask(__name__, 
