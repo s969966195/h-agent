@@ -30,6 +30,15 @@ def get_team():
         _team = AgentTeam()
     return _team
 
+# Lazy-load FullAgentHandler
+_full_agent_handlers = {}
+def get_full_agent_handler(agent_id: str):
+    if agent_id not in _full_agent_handlers:
+        from h_agent.team.agent import FullAgentHandler, AgentLoader
+        profile = AgentLoader.load_profile(agent_id)
+        _full_agent_handlers[agent_id] = FullAgentHandler(agent_id, profile)
+    return _full_agent_handlers[agent_id]
+
 app = Flask(__name__, 
             template_folder=str(Path(__file__).parent / "templates"),
             static_folder=str(Path(__file__).parent / "static"))
@@ -173,6 +182,49 @@ def api_list_agents():
         })
 
     return jsonify({"success": True, "agents": agents})
+
+
+@app.route("/api/agents/<agent_id>/message", methods=["POST"])
+def api_agent_message(agent_id):
+    """Send a message to a team agent and stream response via SSE."""
+    data = request.json or {}
+    message = data.get("message", "")
+    session_id = data.get("session_id")
+    
+    if not message:
+        return jsonify({"error": "Message is required"}), 400
+    
+    def generate():
+        try:
+            handler = get_full_agent_handler(agent_id)
+            
+            for event in handler.run_streaming(message, session_id):
+                event_type = event["event"]
+                event_data = event["data"]
+                
+                if event_type == "token":
+                    yield f"event: token\ndata: {json.dumps({'token': event_data['token']})}\n\n"
+                elif event_type == "tool_start":
+                    yield f"event: tool_start\ndata: {json.dumps({'name': event_data['name'], 'args': event_data['args']})}\n\n"
+                elif event_type == "tool_end":
+                    yield f"event: tool_end\ndata: {json.dumps({'name': event_data['name'], 'result': event_data['result']})}\n\n"
+                elif event_type == "error":
+                    yield f"event: error\ndata: {json.dumps({'error': event_data['error']})}\n\n"
+                elif event_type == "end":
+                    yield f"event: end\ndata: {json.dumps({'done': event_data['done']})}\n\n"
+                    
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield f"event: end\ndata: {json.dumps({'done': True})}\n\n"
+    
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @app.route("/api/teams", methods=["GET"])

@@ -14,7 +14,7 @@ h_agent/team/agent.py - Full-Featured Team Agent
 import os
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Generator, Iterator
 from dataclasses import dataclass, field
 
 from h_agent.core.client import get_client
@@ -361,6 +361,139 @@ class FullAgentHandler:
         if result["success"]:
             return result["content"]
         return f"Error: {result['error']}"
+    
+    def run_streaming(self, task_content: str, session_id: str = None, max_turns: int = 20) -> Generator[dict, None, None]:
+        """
+        运行 Agent 并以 SSE 事件流式输出。
+        
+        Yields:
+            dict with keys: event (str), data (dict)
+            - event: "token" | "tool_start" | "tool_end" | "error" | "end"
+            - data: event-specific payload
+        """
+        # Set session if provided
+        if session_id:
+            self.session_mgr.session_store.current_session_id = session_id
+        
+        try:
+            messages = self.build_messages(task_content)
+            
+            for turn in range(max_turns):
+                # Stream the response
+                response = self.client.chat.completions.create(
+                    model=MODEL,
+                    messages=messages,
+                    tools=self.tools,
+                    tool_choice="auto",
+                    max_tokens=4096,
+                    stream=True,
+                )
+                
+                # Collect assistant message content and tool calls
+                assistant_content = ""
+                tool_calls = []
+                
+                for chunk in response:
+                    delta = chunk.choices[0].delta
+                    
+                    # Stream content tokens
+                    if delta.content:
+                        assistant_content += delta.content
+                        yield {
+                            "event": "token",
+                            "data": {"token": delta.content}
+                        }
+                    
+                    # Collect tool calls
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            if len(tool_calls) <= tc.index:
+                                tool_calls.append({
+                                    "id": "",
+                                    "function": {"name": "", "arguments": ""}
+                                })
+                            if tc.id:
+                                tool_calls[tc.index]["id"] = tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls[tc.index]["function"]["name"] = tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls[tc.index]["function"]["arguments"] += tc.function.arguments
+                
+                # Process tool calls if any
+                if tool_calls:
+                    # Save the assistant message with tool calls
+                    messages.append({
+                        "role": "assistant",
+                        "content": assistant_content,
+                        "tool_calls": [
+                            {"id": tc["id"], "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                            for tc in tool_calls
+                        ],
+                    })
+                    
+                    tool_results = []
+                    for tc in tool_calls:
+                        func_name = tc["function"]["name"]
+                        func_args = tc["function"]["arguments"]
+                        
+                        # Emit tool_start
+                        try:
+                            args_dict = json.loads(func_args)
+                        except:
+                            args_dict = {}
+                        
+                        yield {
+                            "event": "tool_start",
+                            "data": {"name": func_name, "args": str(args_dict)[:200]}
+                        }
+                        
+                        # Execute tool
+                        result = execute_tool_call_with_handlers(
+                            type('obj', (object,), {"function": type('obj', (object,), {"name": func_name, "arguments": func_args})()})(),
+                            self.tool_handlers
+                        )
+                        
+                        # Truncate long results
+                        if len(result) > 50000:
+                            result = result[:25000] + "\n...[truncated]\n" + result[-25000:]
+                        
+                        # Emit tool_end
+                        yield {
+                            "event": "tool_end",
+                            "data": {"name": func_name, "result": result[:500]}
+                        }
+                        
+                        tool_results.append({"name": func_name, "result": result})
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": result,
+                        })
+                    
+                    # Save interaction with tool calls
+                    self.session_mgr.save_interaction(
+                        task_content,
+                        str([{"name": tc["function"]["name"]} for tc in tool_calls]),
+                        tool_results,
+                    )
+                else:
+                    # No tool calls - normal response
+                    messages.append({
+                        "role": "assistant",
+                        "content": assistant_content,
+                    })
+                    self.session_mgr.save_interaction(task_content, assistant_content)
+                    yield {"event": "end", "data": {"done": True}}
+                    return
+            
+            # Max turns exceeded
+            yield {"event": "error", "data": {"error": f"Max turns ({max_turns}) exceeded"}}
+            yield {"event": "end", "data": {"done": True}}
+            
+        except Exception as e:
+            yield {"event": "error", "data": {"error": str(e)}}
+            yield {"event": "end", "data": {"done": True}}
 
 
 def create_full_handler(

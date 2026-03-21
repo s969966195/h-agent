@@ -296,6 +296,8 @@ def my_tool(arg1: str) -> str:
 
 ## 九、完整Agent配置（新版）
 
+> **提示**：新版 Agent Profile 系统支持完整的会话历史、工具调用和流式输出。
+
 ### 9.1 Agent Profile 系统
 
 每个 Agent 现在可以有独立的能力配置：
@@ -395,7 +397,118 @@ h-agent agent edit 我的Agent config
 
 ---
 
-## 十、完整团队配置模板
+## 十、HTTP REST API
+
+### 10.1 端点概览
+
+新版 Agent 支持通过 HTTP API 进行流式对话：
+
+```
+POST /api/agents/{agent_id}/message
+```
+
+### 10.2 请求格式
+
+```bash
+curl -X POST http://localhost:8080/api/agents/我的Agent/message \
+  -H "Content-Type: application/json" \
+  -d '{"message": "你好", "session_id": "可选的会话ID"}'
+```
+
+**请求体**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `message` | string | ✅ | 要发送的消息 |
+| `session_id` | string | ❌ | 会话ID，不传则自动创建新会话 |
+
+### 10.3 响应格式（SSE流）
+
+响应是 Server-Sent Events (SSE) 流：
+
+```
+event: token
+data: {"token": "你好"}
+
+event: token
+data: {"token": "！"}
+
+event: tool_start
+data: {"name": "bash", "args": "{"command": "ls"}"}
+
+event: tool_end
+data: {"name": "bash", "result": "README.md\nsrc/"}
+
+event: end
+data: {"done": true}
+```
+
+**事件类型**：
+
+| 事件 | 说明 |
+|------|------|
+| `token` | 逐字输出的内容 |
+| `tool_start` | 工具开始执行 |
+| `tool_end` | 工具执行完成 |
+| `error` | 发生错误 |
+| `end` | 对话结束 |
+
+### 10.4 JavaScript 调用示例
+
+```javascript
+const response = await fetch('http://localhost:8080/api/agents/我的Agent/message', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({message: '你好', session_id: 'my-session'})
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+  const {done, value} = await reader.read();
+  if (done) break;
+  
+  const text = decoder.decode(value);
+  const lines = text.split('\n');
+  
+  for (const line of lines) {
+    if (line.startsWith('event: ')) {
+      currentEvent = line.slice(7);
+    } else if (line.startsWith('data: ')) {
+      const data = JSON.parse(line.slice(6));
+      if (currentEvent === 'token') {
+        process.stdout.write(data.token);
+      } else if (currentEvent === 'end') {
+        console.log('\n[Done]');
+      }
+    }
+  }
+}
+```
+
+### 10.5 列出所有 Agent
+
+```bash
+curl http://localhost:8080/api/agents
+```
+
+响应：
+
+```json
+{
+  "success": true,
+  "agents": [
+    {"id": "__default__", "name": "默认助手", "role": "assistant"},
+    {"id": "组长", "name": "组长", "role": "coordinator", "team": "dev-team"},
+    {"id": "开发", "name": "开发", "role": "coder", "team": "dev-team"}
+  ]
+}
+```
+
+---
+
+## 十一、完整团队配置模板
 
 以下是一个完整的 6 人团队配置，复制到 `~/.h-agent/team/team_state.json` 即可使用。
 
@@ -474,7 +587,7 @@ h-agent team list
 
 ---
 
-## 十一、常见问题
+## 十二、常见问题
 
 ### Q: 如何删除Agent？
 A: 在 `team_state.json` 中删除对应的成员条目，或设置 `"enabled": false`
@@ -493,7 +606,7 @@ A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己
 
 ---
 
-## 十二、快捷命令汇总
+## 十三、快捷命令汇总
 
 | 命令 | 说明 |
 |------|------|
@@ -512,3 +625,4 @@ A: 在各Agent的system_prompt中说明工作流程，Agent会根据prompt自己
 | `h-agent logs` | 查看日志 |
 | `h-agent skill list` | 列出Skill |
 | `h-agent cron list` | 列出定时任务 |
+| HTTP API | `POST /api/agents/{agent_id}/message` |
