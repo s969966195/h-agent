@@ -12,8 +12,11 @@ h_agent/features/sessions.py - Sessions & Context Protection (OpenAI Version)
 """
 
 import os
+import sys
 import json
 import uuid
+import fcntl
+import contextlib
 from pathlib import Path
 from datetime import datetime
 from typing import Any, List, Dict, Optional
@@ -28,6 +31,45 @@ WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 CONTEXT_SAFE_LIMIT = 180000  # tokens
 MAX_TOOL_OUTPUT = 50000
+SESSION_TTL_DAYS = int(os.getenv("H_AGENT_SESSION_TTL_DAYS", "30"))  # Default 30 days
+
+# Platform detection for file locking
+IS_WINDOWS = sys.platform == "win32"
+_msvcrt = None
+if IS_WINDOWS:
+    try:
+        import msvcrt
+        _msvcrt = msvcrt
+    except ImportError:
+        pass
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path, mode: str = "r"):
+    """Platform-safe file locking context manager."""
+    if IS_WINDOWS:
+        flags = mode == "r" and 0x1 or 0x2
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+        _locking = getattr(_msvcrt, "locking", None)
+        try:
+            if _locking:
+                _locking(fd, flags, 0)
+            yield
+        finally:
+            if _locking:
+                _locking(fd, 0x8, 0)
+            os.close(fd)
+    else:
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            if mode == "r":
+                fcntl.flock(fd, fcntl.LOCK_SH)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 # ============================================================
 # Session Store - JSONL 持久化
@@ -105,13 +147,14 @@ class SessionStore:
         session_file = self._session_path(session_id)
         
         if session_file.exists():
-            with open(session_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            messages.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
+            with _file_lock(session_file, mode="r"):
+                with open(session_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                messages.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
         
         return messages
     
@@ -129,12 +172,12 @@ class SessionStore:
             "timestamp": datetime.now().isoformat(),
         }
         
-        # 追加到 JSONL
         session_file = self._session_path(session_id)
-        with open(session_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(turn, ensure_ascii=False) + "\n")
         
-        # 更新索引
+        with _file_lock(session_file, mode="w"):
+            with open(session_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(turn, ensure_ascii=False) + "\n")
+        
         if session_id in self._index:
             meta = self._index[session_id]
             meta["message_count"] = meta.get("message_count", 0) + 1
@@ -149,6 +192,27 @@ class SessionStore:
             reverse=True
         )
         return sessions[:limit]
+    
+    def cleanup_expired(self) -> int:
+        """删除超过 TTL 的会话，返回删除数量。"""
+        from datetime import timedelta
+        expired_threshold = datetime.now() - timedelta(days=SESSION_TTL_DAYS)
+        expired_ids = []
+        
+        for session_id, meta in self._index.items():
+            updated_at = meta.get("updated_at", "")
+            if updated_at:
+                try:
+                    dt = datetime.fromisoformat(updated_at)
+                    if dt < expired_threshold:
+                        expired_ids.append(session_id)
+                except ValueError:
+                    pass
+        
+        for session_id in expired_ids:
+            self.delete_session(session_id)
+        
+        return len(expired_ids)
     
     def delete_session(self, session_id: str) -> bool:
         """删除会话。"""

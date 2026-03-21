@@ -149,17 +149,43 @@ class AgentLoader:
         identity = ""
         if profile.identity_path.exists():
             identity = profile.identity_path.read_text(encoding="utf-8")
-        parts.append(f"=== IDENTITY ===\n{identity}")
         
         soul = ""
         if profile.soul_path.exists():
             soul = profile.soul_path.read_text(encoding="utf-8")
-        parts.append(f"=== SOUL (行为准则) ===\n{soul}")
         
         user_info = ""
         if profile.user_path.exists():
             user_info = profile.user_path.read_text(encoding="utf-8")
-        parts.append(f"=== USER INFO ===\n{user_info}")
+        
+        if not identity and not soul and not user_info:
+            default_prompt = f"""你是一个专业的 AI 助手，名字是 {profile.name}。
+
+重要：你拥有完整的对话历史。请从历史记录中记住用户的信息、偏好和之前讨论的内容。
+
+你的职责：
+1. 理解用户的问题和需求
+2. 提供准确、有帮助的回答
+3. 如有需要，使用工具来完成复杂任务
+4. 主动从对话历史中提取相关信息
+
+可用工具：bash（执行命令）、read（读取文件）、write（写入文件）
+
+工作目录：.agent_workspace
+
+重要准则：
+- 保持回答简洁、专业
+- 如果不确定，说明不知道
+- 主动识别用户意图，提供最佳解决方案
+- 从对话历史中记住用户的名字、偏好、之前的问题和回答"""
+            parts.append(default_prompt)
+        else:
+            if identity:
+                parts.append(f"=== IDENTITY ===\n{identity}")
+            if soul:
+                parts.append(f"=== SOUL (行为准则) ===\n{soul}")
+            if user_info:
+                parts.append(f"=== USER INFO ===\n{user_info}")
         
         if extra_context:
             parts.append(f"=== CURRENT CONTEXT ===\n{extra_context}")
@@ -422,12 +448,11 @@ class FullAgentHandler:
                 
                 # Process tool calls if any
                 if tool_calls:
-                    # Save the assistant message with tool calls
                     messages.append({
                         "role": "assistant",
-                        "content": assistant_content,
+                        "content": assistant_content if assistant_content else None,
                         "tool_calls": [
-                            {"id": tc["id"], "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                            {"id": tc["id"], "type": "function", "function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
                             for tc in tool_calls
                         ],
                     })
