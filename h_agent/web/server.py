@@ -265,7 +265,8 @@ def api_chat():
     # Get or create session
     mgr = get_manager()
     if not session_id:
-        session = mgr.create_session("web-chat")
+        session_name = message[:50] + "..." if len(message) > 50 else message
+        session = mgr.create_session(session_name)
         session_id = session["session_id"]
     
     # Add user message
