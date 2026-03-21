@@ -396,7 +396,13 @@ def cmd_team(args) -> int:
         for agent_def in DEFAULT_AGENTS:
             name = agent_def["name"]
             role = role_map.get(agent_def["role"], AgentRole.CODER)
-            handler = _create_llm_handler(name, agent_def["prompt"])
+            
+            profile = AgentLoader.load_profile(name)
+            if not profile:
+                profile = init_agent_profile(name, role=agent_def["role"], description=agent_def["description"])
+                profile.soul_path.write_text(agent_def["prompt"])
+            
+            handler = create_full_handler(name, profile)
             team.register(
                 name,
                 role,

@@ -887,13 +887,21 @@ class AgentTeam:
                             session_id=loaded_sessions.get(name),
                             _prompt=system_prompt,
                         )
-                        # Try to recreate handler from stored/default prompt
+                         # Try to recreate handler from stored/default prompt
                         if system_prompt:
                             try:
-                                handler = _create_llm_handler_from_prompt(name, system_prompt)
+                                from h_agent.team.agent import AgentLoader, create_full_handler
+                                profile = AgentLoader.load_profile(name)
+                                if profile:
+                                    handler = create_full_handler(name, profile)
+                                else:
+                                    from h_agent.team.agent import init_agent_profile
+                                    profile = init_agent_profile(name, role=role.value, description=m_data.get("description", ""))
+                                    if profile.soul_path.exists():
+                                        profile.soul_path.write_text(system_prompt)
+                                    handler = create_full_handler(name, profile)
                                 member.set_handler(handler)
                             except Exception:
-                                # Handler creation failed; member stays without handler
                                 pass
                         self.members[name] = member
             except (json.JSONDecodeError, OSError):
